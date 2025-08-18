@@ -23,7 +23,7 @@ Deterministic, Internet Archive–powered beat builder that slices audible, onse
 	pip install numpy scipy librosa soundfile requests mido
 
 	# Run with zero args — BeatSmith v3 will pick everything (sig map, BPM, preset, sources, FX).
-	./beatsmith_v3.py
+	python -m beatsmith
 
 	# Output directory is created automatically (e.g., ./beatsmith_auto/bs_YYYYMMDD_HHMMSS_XXXX)
 	# The final WAV and beatsmith_v3.db (SQLite) live there; stems if Autopilot enabled them.
@@ -46,31 +46,31 @@ Deterministic, Internet Archive–powered beat builder that slices audible, onse
 
 ### 1) Autopilot (random banks, reproducible if you capture the seed)
 	# Full Autopilot
-	./beatsmith_v3.py
+	python -m beatsmith
 
 	# Semi-auto: you supply out_dir; everything else randomized
-	./beatsmith_v3.py ./out_autogen
+	python -m beatsmith ./out_autogen
 
 	# Force Autopilot even when passing some options
-	./beatsmith_v3.py --auto --stems
+	python -m beatsmith --auto --stems
 
 BeatSmith prints the chosen `seed`/`salt`, `sig_map`, preset, BPM, query bias, FX, etc. Reuse those to reproduce the exact render.
 
         # Example reproducible run
-        $ ./beatsmith_v3.py
+        $ python -m beatsmith
         [i] Run id=42 preset=lofi BPM=78.3 sig_map=3/4(8) seed='cafe89'
         [i] FX: compressor, reverb 0.12@0.40
 
         # Recreate that exact beat later
-        $ ./beatsmith_v3.py out "3/4(8)" --bpm 78.3 --preset lofi \
+        $ python -m beatsmith out "3/4(8)" --bpm 78.3 --preset lofi \
                 --seed cafe89 --compress --reverb-mix 0.12 --reverb-room 0.40
 
 ### 2) Fully specified (classic control)
 	# 8 measures of 4/4 at 124 BPM, boom-bap preset, stems on
-	./beatsmith_v3.py out "4/4(8)" --bpm 124 --preset boom-bap --stems
+	python -m beatsmith out "4/4(8)" --bpm 124 --preset boom-bap --stems
 
 	# Mixed signatures, license allow-list strict, more sources, tasteful FX
-	./beatsmith_v3.py out "4/4(4),5/4(3),6/8(5)" --bpm 132 \
+	python -m beatsmith out "4/4(4),5/4(3),6/8(5)" --bpm 132 \
 		--license-allow "cc0,cc-by,public domain" --strict-license \
 		--num-sources 6 --tempo-fit strict --compress \
 		--eq-low +2 --eq-mid -1 --eq-high +3 \
@@ -80,7 +80,7 @@ BeatSmith prints the chosen `seed`/`salt`, `sig_map`, preset, BPM, query bias, F
 		--stems
 
 	# Build on your existing loop with lookahead sidechain pumping
-	./beatsmith_v3.py out "4/4(16)" --bpm 124 --build-on ./my_loop.wav \
+	python -m beatsmith out "4/4(16)" --bpm 124 --build-on ./my_loop.wav \
 		--sidechain 0.6 --sidechain-lookahead-ms 10 --preset edm
 
 ### 3) Presets
@@ -193,10 +193,10 @@ See `ROADMAP.md` for concrete plugin/registry plans and task breakdowns.
 
 ## Examples
 	# Groovey EDM Autopilot with stems
-	./beatsmith_v3.py --auto --preset edm --stems
+	python -m beatsmith --auto --preset edm --stems
 
 	# Tight 7/8 texture piece from ambient sources
-	./beatsmith_v3.py out "7/8(12)" --bpm 126 --preset lofi \
+	python -m beatsmith out "7/8(12)" --bpm 126 --preset lofi \
 		--query-bias "ambient texture OR pad" --tempo-fit loose --stems
 
 ---

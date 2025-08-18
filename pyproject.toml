@@ -1,0 +1,20 @@
+[project]
+name = "beatsmith"
+version = "0.1.0"
+description = "Internet Archive powered stochastic beat builder"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "librosa",
+    "soundfile",
+    "requests",
+    "mido",
+]
+
+[project.scripts]
+beatsmith = "beatsmith.cli:main"
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
