@@ -846,7 +846,7 @@ def main():
             if len(mix)  < LL: mix  = np.pad(mix,  (0, LL-len(mix)))
             if len(base) < LL: base = np.pad(base, (0, LL-len(base)))
             if args.sidechain > 0.0:
-                li(f"Applying lookahead sidechain amount={args.sidechain:.2f} lookahead={args.sidechain-lookahead-ms if hasattr(args,'sidechain_lookahead_ms') else 0}ms")
+                li(f"Applying lookahead sidechain amount={args.sidechain:.2f} lookahead={args.sidechain_lookahead_ms if hasattr(args,'sidechain_lookahead_ms') else 0}ms")
                 mix = lookahead_sidechain(mix, base, TARGET_SR, amount=float(max(0.0, min(args.sidechain, 1.0))), look_ms=float(max(0.0, args.sidechain_lookahead_ms)))
             # equal-power-ish mix
             mix = (0.5*base + 0.5*mix).astype(np.float32)
