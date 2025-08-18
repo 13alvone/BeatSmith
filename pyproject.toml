@@ -15,6 +15,16 @@ dependencies = [
 [project.scripts]
 beatsmith = "beatsmith.cli:main"
 
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "ruff",
+]
+
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

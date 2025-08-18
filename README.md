@@ -176,6 +176,18 @@ See `ROADMAP.md` for concrete plugin/registry plans and task breakdowns.
 
 ---
 
+## Testing
+        # Install test and lint dependencies
+        pip install -e .[test]
+
+        # Run style checks
+        ruff check tests
+
+        # Execute unit tests
+        pytest
+
+---
+
 ## Licensing & Ethics
 	- BeatSmith is an art/sonification engine. You are responsible for how you use the outputs.
 	- We *prefer* Creative Commons / Public Domain assets and expose a license allow-list.
