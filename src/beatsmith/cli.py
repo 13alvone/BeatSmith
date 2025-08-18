@@ -13,7 +13,8 @@ from . import li, lw, ld, le, log
 from .db import db_open
 from .audio import (
     MeasureSpec, parse_sig_map, seconds_per_measure, seeded_rng, normalize_peak,
-    load_audio_file, pick_sources, build_measures, assemble_track, TARGET_SR
+    load_audio_file, pick_sources, build_measures, assemble_track, TARGET_SR,
+    preview_sources,
 )
 from .fx import (
     compressor, eq_three_band, reverb_schroeder, tremolo, phaser, echo, lookahead_sidechain
@@ -121,6 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--microfill", action="store_true", help="Enable tiny end-of-measure fills on texture bus.")
     p.add_argument("--preset", type=str, default=None, help="Preset: boom-bap | edm | lofi")
     p.add_argument("--auto", action="store_true", help="Autopilot mode: randomize signature map, BPM, preset, sources, FX.")
+    p.add_argument("--dry-run", action="store_true", help="Print planned sources and measures without downloading audio.")
     p.add_argument("--verbose", action="store_true", help="Enable debug logs.")
     p.add_argument("--build-on", type=str, default=None, help="Path to an existing base track to mix under.")
     p.add_argument("--sidechain", type=float, default=0.0, help="Sidechain duck amount 0..1 against base (default 0).")
@@ -164,6 +166,22 @@ def main():
                 setattr(args, k, v)
     args.seed = seed
     apply_preset(args)
+    if args.dry_run:
+        measures = build_measures(args.sig_map)
+        total_sec = sum(seconds_per_measure(args.bpm, n, d) for n, d in measures)
+        li(f"Total measures: {len(measures)}  est length ≈ {total_sec:.1f}s")
+        allow_tokens = [t.strip() for t in (args.license_allow or "").split(",") if t.strip()]
+        strict = bool(args.strict_license)
+        li("Planning Internet Archive sources...")
+        plans = preview_sources(
+            rng, wanted=max(2, args.num_sources),
+            query_bias=args.query_bias, allow_tokens=allow_tokens, strict=strict,
+        )
+        for idx, pinfo in enumerate(plans, 1):
+            title = pinfo.get("title") or pinfo.get("file") or "unknown"
+            li(f"Source {idx}: {title} ({pinfo.get('url')})")
+        li("Dry run complete. No audio downloaded or files written.")
+        return
     out_dir = os.path.abspath(args.out_dir)
     os.makedirs(out_dir, exist_ok=True)
     stems_dirs = {}

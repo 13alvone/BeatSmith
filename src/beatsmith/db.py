@@ -1,5 +1,8 @@
+import json
 import sqlite3
 import sys
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from . import le
 
@@ -57,3 +60,40 @@ def db_open(path: str) -> sqlite3.Connection:
     except Exception as e:
         le(f"DB open/init failed: {e}")
         sys.exit(1)
+
+
+def find_latest_db(root: str = ".") -> Optional[str]:
+    """Locate the most recently modified beatsmith_v3.db under root."""
+    paths = list(Path(root).rglob("beatsmith_v3.db"))
+    if not paths:
+        return None
+    latest = max(paths, key=lambda p: p.stat().st_mtime)
+    return str(latest)
+
+
+def read_last_run(conn: sqlite3.Connection) -> Optional[Dict[str, Any]]:
+    """Return info for the most recent run or None."""
+    cur = conn.execute(
+        "SELECT id,created_at,out_dir,bpm,sig_map,seed,salt,params_json FROM runs ORDER BY id DESC LIMIT 1"
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    run: Dict[str, Any] = {
+        "id": row[0],
+        "created_at": row[1],
+        "out_dir": row[2],
+        "bpm": row[3],
+        "sig_map": row[4],
+        "seed": row[5],
+        "salt": row[6],
+        "params": json.loads(row[7]) if row[7] else {},
+    }
+    run_id = run["id"]
+    run["num_sources"] = conn.execute(
+        "SELECT COUNT(*) FROM sources WHERE run_id=?", (run_id,)
+    ).fetchone()[0]
+    run["num_segments"] = conn.execute(
+        "SELECT COUNT(*) FROM segments WHERE run_id=?", (run_id,)
+    ).fetchone()[0]
+    return run
