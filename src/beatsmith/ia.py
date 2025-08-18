@@ -1,6 +1,7 @@
 import hashlib
 import os
 import random
+import time
 from typing import List, Dict, Optional
 
 import requests
@@ -10,6 +11,41 @@ from . import lw, ld
 IA_ADV_URL = "https://archive.org/advancedsearch.php"
 IA_META_URL = "https://archive.org/metadata/"
 AUDIO_EXTS = {".wav", ".wave", ".aif", ".aiff", ".flac", ".mp3", ".ogg", ".oga", ".m4a"}
+
+
+def _get_with_retry(url: str, *, params=None, headers=None, timeout=20,
+                     stream=False, max_retries: int = 3, backoff: float = 1.0):
+    """requests.get with retries and exponential backoff.
+
+    Retries on exceptions as well as 429 and 5xx responses. Returns the
+    successful ``requests.Response`` or ``None`` if all attempts fail.
+    """
+    for attempt in range(max_retries):
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=timeout, stream=stream)
+            if r.status_code == 429 or r.status_code >= 500:
+                wait = backoff
+                if r.status_code == 429:
+                    ra = r.headers.get("Retry-After")
+                    if ra and ra.isdigit():
+                        wait = float(ra)
+                lw(f"HTTP {r.status_code} for {url}, retrying in {wait}s")
+                r.close()
+                if attempt < max_retries - 1:
+                    time.sleep(wait)
+                    backoff *= 2
+                    continue
+                break
+            return r
+        except Exception as e:
+            lw(f"GET failed for {url}: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(backoff)
+                backoff *= 2
+            else:
+                break
+    lw(f"Exceeded max retries for {url}")
+    return None
 
 def ia_license_ok(licenseurl: Optional[str], allow_tokens: List[str]) -> bool:
     if not licenseurl:
@@ -35,13 +71,17 @@ def ia_search_random(rng: random.Random, rows: int, query_bias: Optional[str],
         "output": "json",
     }
     headers = {"User-Agent": "BeatSmith/3.0 (+open source art engine)"}
+    r = _get_with_retry(IA_ADV_URL, params=params, timeout=20, headers=headers)
+    if not r:
+        return []
     try:
-        r = requests.get(IA_ADV_URL, params=params, timeout=20, headers=headers)
         r.raise_for_status()
         data = r.json()
     except Exception as e:
         lw(f"IA search failed: {e}")
         return []
+    finally:
+        r.close()
     docs = data.get("response", {}).get("docs", [])
     if strict:
         docs = [d for d in docs if ia_license_ok(d.get("licenseurl"), allow_tokens)]
@@ -51,13 +91,17 @@ def ia_search_random(rng: random.Random, rows: int, query_bias: Optional[str],
 def ia_pick_files_for_item(identifier: str) -> List[Dict]:
     url = IA_META_URL + identifier
     headers = {"User-Agent": "BeatSmith/3.0 (+open source art engine)"}
+    r = _get_with_retry(url, timeout=20, headers=headers)
+    if not r:
+        return []
     try:
-        r = requests.get(url, timeout=20, headers=headers)
         r.raise_for_status()
         meta = r.json()
     except Exception as e:
         lw(f"IA metadata failed for {identifier}: {e}")
         return []
+    finally:
+        r.close()
     files = meta.get("files", []) or []
     picked = []
     for f in files:
@@ -90,8 +134,11 @@ def http_get_cached(url: str, cache_dir: str, timeout: int = 30, max_bytes: int 
         except Exception as e:
             lw(f"Cache read failed (will re-download): {e}")
     headers = {"User-Agent": "BeatSmith/3.0 (+open source art engine)"}
+    r = _get_with_retry(url, timeout=timeout, headers=headers, stream=True)
+    if not r:
+        return None
     try:
-        with requests.get(url, stream=True, timeout=timeout, headers=headers) as r:
+        with r:
             r.raise_for_status()
             chunks = []
             size = 0
