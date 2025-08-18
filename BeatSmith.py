@@ -39,7 +39,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Any
 
 import numpy as np
 import requests
@@ -558,6 +558,56 @@ def apply_preset(args: argparse.Namespace):
     else:
         lw(f"Unknown preset '{args.preset}', ignoring.")
 
+# ---------------------------- Autopilot ----------------------------
+def autopilot_config(rng: random.Random) -> Dict[str, Any]:
+    """Return a randomized configuration for Autopilot mode."""
+    sig_opts = [
+        "4/4(8)",
+        "4/4(4),5/4(3),6/8(5)",
+        "3/4(8)",
+        "7/8(8)",
+        "5/4(8)",
+    ]
+    sig_str = rng.choice(sig_opts)
+    preset = rng.choice(["boom-bap", "edm", "lofi"])
+    if preset == "boom-bap":
+        bpm = rng.uniform(80, 96)
+    elif preset == "edm":
+        bpm = rng.uniform(120, 136)
+    else:
+        bpm = rng.uniform(60, 84)
+
+    out_dir = os.path.join(
+        "beatsmith_auto",
+        f"bs_{time.strftime('%Y%m%d_%H%M%S')}_{rng.randrange(10000):04d}"
+    )
+
+    cfg: Dict[str, Any] = {
+        "out_dir": out_dir,
+        "sig_map": parse_sig_map(sig_str),
+        "preset": preset,
+        "bpm": float(bpm),
+        "num_sources": rng.randint(4, 8),
+        "crossfade": rng.uniform(0.01, 0.04),
+        "stems": rng.random() < 0.3,
+        "microfill": rng.random() < 0.5,
+        "tempo_fit": rng.choice(["off", "loose", "strict"]),
+        "compress": rng.random() < 0.5,
+        "eq_low": rng.uniform(-3, 3),
+        "eq_mid": rng.uniform(-3, 3),
+        "eq_high": rng.uniform(-3, 3),
+        "reverb_mix": rng.uniform(0.05, 0.25) if rng.random() < 0.7 else 0.0,
+        "reverb_room": rng.uniform(0.2, 0.6),
+        "tremolo_rate": rng.uniform(3.0, 7.0) if rng.random() < 0.3 else 0.0,
+        "tremolo_depth": rng.uniform(0.2, 0.6),
+        "phaser_rate": rng.uniform(0.1, 1.0) if rng.random() < 0.2 else 0.0,
+        "phaser_depth": rng.uniform(0.3, 0.7),
+        "echo_ms": rng.uniform(200, 500) if rng.random() < 0.4 else 0.0,
+        "echo_fb": rng.uniform(0.2, 0.5),
+        "echo_mix": rng.uniform(0.1, 0.4),
+    }
+    return cfg
+
 # ---------------------------- Core Build ----------------------------
 @dataclass
 class SourceRef:
@@ -715,9 +765,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="BeatSmith v2: pull CC/PD audio from Internet Archive, onset-align slices per signature map, run percussive+texture buses, FX, and render a beat."
     )
-    # Required positional
-    p.add_argument("out_dir", help="Output directory (created if missing).")
-    p.add_argument("sig_map", type=parse_sig_map, help="Signature map like '4/4(4),5/4(3),6/8(5)'.")
+    # Optional positional (Autopilot fills when missing)
+    p.add_argument("out_dir", nargs="?", default=None,
+                   help="Output directory (created if missing).")
+    p.add_argument("sig_map", nargs="?", default=None, type=parse_sig_map,
+                   help="Signature map like '4/4(4),5/4(3),6/8(5)'.")
 
     # Core
     p.add_argument("--bpm", type=float, default=120.0, help="Beats per minute (default: 120).")
@@ -734,6 +786,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stems", action="store_true", help="Write stems per bus/measure.")
     p.add_argument("--microfill", action="store_true", help="Enable tiny end-of-measure fills on texture bus.")
     p.add_argument("--preset", type=str, default=None, help="Preset: boom-bap | edm | lofi")
+    p.add_argument("--auto", action="store_true",
+                   help="Autopilot mode: randomize signature map, BPM, preset, sources, FX.")
     p.add_argument("--verbose", action="store_true", help="Enable debug logs.")
 
     # Build-on options
@@ -772,6 +826,24 @@ def main():
         log.setLevel(logging.DEBUG)
         li("Verbose logging enabled.")
 
+    seed = args.seed or f"auto-{time.time_ns()}"
+    rng = seeded_rng(seed, args.salt)
+
+    if args.auto or args.out_dir is None or args.sig_map is None:
+        auto = autopilot_config(rng)
+        if args.auto or args.out_dir is None:
+            args.out_dir = auto["out_dir"]
+        if args.auto or args.sig_map is None:
+            args.sig_map = auto["sig_map"]
+        for k, v in auto.items():
+            if k in ("out_dir", "sig_map"):
+                continue
+            cur = getattr(args, k, None)
+            if args.auto or cur in (None, 0, 0.0, False, "off"):
+                setattr(args, k, v)
+
+    args.seed = seed
+
     apply_preset(args)
 
     out_dir = os.path.abspath(args.out_dir)
@@ -789,9 +861,6 @@ def main():
     db_path = os.path.join(out_dir, "beatsmith_v2.db")
     conn = db_open(db_path)
 
-    seed = args.seed or f"default-seed-{time.time_ns()}"
-    rng = seeded_rng(seed, args.salt)
-
     # Record run
     params = vars(args).copy()
     params["sig_map"] = None
@@ -801,7 +870,21 @@ def main():
         (out_dir, float(args.bpm), sig_str, seed, args.salt or "", json.dumps(params, ensure_ascii=False))
     )
     run_id = row.lastrowid
-    li(f"Run id={run_id} BPM={args.bpm} sig_map={sig_str} seed='{seed}' salt='{args.salt or ''}'")
+    li(f"Run id={run_id} preset={args.preset or 'none'} BPM={args.bpm} sig_map={sig_str} seed='{seed}' salt='{args.salt or ''}'")
+    fx_bits = []
+    if args.compress: fx_bits.append("compressor")
+    if any(abs(x) > 1e-6 for x in [args.eq_low, args.eq_mid, args.eq_high]):
+        fx_bits.append(f"eq[{args.eq_low:.1f},{args.eq_mid:.1f},{args.eq_high:.1f}]")
+    if args.reverb_mix > 0.0:
+        fx_bits.append(f"reverb {args.reverb_mix:.2f}@{args.reverb_room:.2f}")
+    if args.tremolo_rate > 0.0:
+        fx_bits.append(f"trem {args.tremolo_rate:.1f}Hz@{args.tremolo_depth:.2f}")
+    if args.phaser_rate > 0.0:
+        fx_bits.append(f"phaser {args.phaser_rate:.1f}Hz@{args.phaser_depth:.2f}")
+    if args.echo_ms > 0.0:
+        fx_bits.append(f"echo {args.echo_ms:.0f}ms fb={args.echo_fb:.2f} mix={args.echo_mix:.2f}")
+    if fx_bits:
+        li("FX: " + ", ".join(fx_bits))
 
     # Fetch sources
     allow_tokens = [t.strip() for t in (args.license_allow or "").split(",") if t.strip()]

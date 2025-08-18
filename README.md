@@ -56,6 +56,15 @@ Deterministic, Internet Archive–powered beat builder that slices audible, onse
 
 BeatSmith prints the chosen `seed`/`salt`, `sig_map`, preset, BPM, query bias, FX, etc. Reuse those to reproduce the exact render.
 
+        # Example reproducible run
+        $ ./beatsmith_v3.py
+        [i] Run id=42 preset=lofi BPM=78.3 sig_map=3/4(8) seed='cafe89'
+        [i] FX: compressor, reverb 0.12@0.40
+
+        # Recreate that exact beat later
+        $ ./beatsmith_v3.py out "3/4(8)" --bpm 78.3 --preset lofi \
+                --seed cafe89 --compress --reverb-mix 0.12 --reverb-room 0.40
+
 ### 2) Fully specified (classic control)
 	# 8 measures of 4/4 at 124 BPM, boom-bap preset, stems on
 	./beatsmith_v3.py out "4/4(8)" --bpm 124 --preset boom-bap --stems
