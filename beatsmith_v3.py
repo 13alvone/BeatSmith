@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-BeatSmith v2: Internet-Archive powered stochastic beat builder with onset alignment,
+BeatSmith v3: Internet-Archive powered stochastic beat builder with onset alignment,
 license allow-list, percussive/texture buses, tempo-fit, caching, presets, stems,
 and deterministic seeding.
 
@@ -12,9 +12,9 @@ System deps:
   ffmpeg (for decoding via librosa/audioread)
 
 Examples:
-  ./beatsmith_v2.py out "4/4(8)" --bpm 124 --preset boom-bap --seed funk --salt v2 --stems
+  ./beatsmith_v3.py out "4/4(8)" --bpm 124 --preset boom-bap --seed funk --salt v3 --stems
 
-  ./beatsmith_v2.py out "4/4(4),5/4(3),6/8(5)" --bpm 132 \
+  ./beatsmith_v3.py out "4/4(4),5/4(3),6/8(5)" --bpm 132 \
     --license-allow "cc0,cc-by,publicdomain" \
     --num-sources 6 --tempo-fit strict --compress \
     --eq-low +2 --eq-mid -1 --eq-high +3 \
@@ -24,7 +24,7 @@ Examples:
     --stems --verbose
 
   # Build atop an existing track with lookahead sidechain
-  ./beatsmith_v2.py out "4/4(16)" --bpm 124 --build-on ./my_loop.wav \
+  ./beatsmith_v3.py out "4/4(16)" --bpm 124 --build-on ./my_loop.wav \
     --sidechain 0.6 --sidechain-lookahead-ms 10
 """
 import argparse
@@ -56,7 +56,7 @@ except Exception:
 # ---------------------------- Logging ----------------------------
 LOG_FORMAT = "%(message)s"
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
-log = logging.getLogger("BeatSmithV2")
+log = logging.getLogger("BeatSmithV3")
 def li(msg: str): log.info("[i] " + msg)
 def lw(msg: str): log.warning("[!] " + msg)
 def ld(msg: str): log.debug("[DEBUG] " + msg)
@@ -179,7 +179,7 @@ def ia_search_random(rng: random.Random, rows: int, query_bias: Optional[str],
         "page": 1,
         "output": "json",
     }
-    headers = {"User-Agent": "BeatSmith/2.0 (+open source art engine)"}
+    headers = {"User-Agent": "BeatSmith/3.0 (+open source art engine)"}
     try:
         r = requests.get(IA_ADV_URL, params=params, timeout=20, headers=headers)
         r.raise_for_status()
@@ -195,7 +195,7 @@ def ia_search_random(rng: random.Random, rows: int, query_bias: Optional[str],
 
 def ia_pick_files_for_item(identifier: str) -> List[Dict]:
     url = IA_META_URL + identifier
-    headers = {"User-Agent": "BeatSmith/2.0 (+open source art engine)"}
+    headers = {"User-Agent": "BeatSmith/3.0 (+open source art engine)"}
     try:
         r = requests.get(url, timeout=20, headers=headers)
         r.raise_for_status()
@@ -235,7 +235,7 @@ def http_get_cached(url: str, cache_dir: str, timeout: int = 30, max_bytes: int 
                     return b
         except Exception as e:
             lw(f"Cache read failed (will re-download): {e}")
-    headers = {"User-Agent": "BeatSmith/2.0 (+open source art engine)"}
+    headers = {"User-Agent": "BeatSmith/3.0 (+open source art engine)"}
     try:
         with requests.get(url, stream=True, timeout=timeout, headers=headers) as r:
             r.raise_for_status()
@@ -763,7 +763,7 @@ def assemble_track(conn: sqlite3.Connection, run_id: int, sources: List[SourceRe
 # ---------------------------- CLI ----------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="BeatSmith v2: pull CC/PD audio from Internet Archive, onset-align slices per signature map, run percussive+texture buses, FX, and render a beat."
+        description="BeatSmith v3: pull CC/PD audio from Internet Archive, onset-align slices per signature map, run percussive+texture buses, FX, and render a beat."
     )
     # Optional positional (Autopilot fills when missing)
     p.add_argument("out_dir", nargs="?", default=None,
@@ -858,7 +858,7 @@ def main():
         os.makedirs(tex_dir, exist_ok=True)
         stems_dirs = {"perc": perc_dir, "tex": tex_dir}
 
-    db_path = os.path.join(out_dir, "beatsmith_v2.db")
+    db_path = os.path.join(out_dir, "beatsmith_v3.db")
     conn = db_open(db_path)
 
     # Record run
@@ -959,7 +959,7 @@ def main():
         mix = (0.75*mix + 0.25*wet).astype(np.float32)
 
     mix = normalize_peak(mix, peak_db=-0.8)
-    out_wav = os.path.join(out_dir, f"beatsmith_v2_{run_id}.wav")
+    out_wav = os.path.join(out_dir, f"beatsmith_v3_{run_id}.wav")
     sf.write(out_wav, mix, TARGET_SR, subtype="PCM_16")
     li(f"Wrote: {out_wav}")
 
