@@ -80,10 +80,18 @@ BeatSmith prints the chosen `seed`/`salt`, `sig_map`, preset, BPM, query bias, F
 		--stems
 
 	# Build on your existing loop with lookahead sidechain pumping
-	python -m beatsmith out "4/4(16)" --bpm 124 --build-on ./my_loop.wav \
-		--sidechain 0.6 --sidechain-lookahead-ms 10 --preset edm
+        python -m beatsmith out "4/4(16)" --bpm 124 --build-on ./my_loop.wav \
+                --sidechain 0.6 --sidechain-lookahead-ms 10 --preset edm
 
-### 3) Presets
+### 3) Dry run (plan without downloads)
+        # See planned measures and candidate sources, but skip audio fetch
+        python -m beatsmith out "4/4(8)" --dry-run
+
+### 4) Inspect previous run
+        # Show summary of latest beatsmith_v3.db under current directory
+        beatsmith inspect
+
+### 5) Presets
 	--preset boom-bap | edm | lofi
 
 Presets bias EQ, FX, and query terms sensibly. You can still override any knob.
@@ -96,7 +104,8 @@ Presets bias EQ, FX, and query terms sensibly. You can still override any knob.
 	  sig_map                     Signature program like "4/4(4),5/4(3),6/8(5)". Autopilot picks one if omitted.
 
 	Core:
-	  --auto                      Force Autopilot (random banks).
+          --auto                      Force Autopilot (random banks).
+          --dry-run                   Print planned sources/measures and exit.
 	  --bpm FLOAT                 Global BPM (Autopilot picks a sane range per preset).
 	  --seed STR                  Deterministic seed.
 	  --salt STR                  Additional salt to create alternate takes deterministically.

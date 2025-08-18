@@ -250,6 +250,34 @@ def pick_sources(conn: sqlite3.Connection, run_id: int, rng: random.Random,
                                 {"zcr":0.05,"flatness":0.9,"onset_density":0.2}))
     return picked
 
+
+def preview_sources(rng: random.Random, wanted: int, query_bias: Optional[str],
+                    allow_tokens: List[str], strict: bool) -> List[Dict[str, Optional[str]]]:
+    """Plan candidate sources without downloading audio."""
+    docs = ia_search_random(rng, rows=max(50, wanted * 15),
+                            query_bias=query_bias, allow_tokens=allow_tokens, strict=strict)
+    if not docs:
+        docs = ia_search_random(rng, rows=max(50, wanted * 15),
+                                query_bias=query_bias, allow_tokens=allow_tokens, strict=False)
+    planned: List[Dict[str, Optional[str]]] = []
+    for doc in docs:
+        if len(planned) >= wanted:
+            break
+        ident = doc.get("identifier")
+        files = ia_pick_files_for_item(ident) if ident else []
+        rng.shuffle(files)
+        for f in files:
+            planned.append({
+                "identifier": f.get("identifier"),
+                "file": f.get("name"),
+                "title": f.get("title"),
+                "licenseurl": f.get("licenseurl"),
+                "url": f.get("url"),
+            })
+            if len(planned) >= wanted:
+                break
+    return planned
+
 def choose_by_bus(sources: List[SourceRef], bus: str, rng: random.Random) -> SourceRef:
     cands = [s for s in sources if s.bus == bus]
     if not cands:
