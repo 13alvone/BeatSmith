@@ -12,7 +12,7 @@ import soundfile as sf
 import librosa
 
 from . import li, lw
-from .ia import ia_search_random, ia_pick_files_for_item, http_get_cached
+from .providers import Provider
 
 # ---------------------------- Sig map ----------------------------
 @dataclass
@@ -183,99 +183,179 @@ class SourceRef:
     bus: str
     metrics: Dict[str, float]
 
-def pick_sources(conn: sqlite3.Connection, run_id: int, rng: random.Random,
-                 wanted: int, query_bias: Optional[str],
-                 allow_tokens: List[str], strict: bool,
-                 cache_dir: str, pause_s: float = 0.6) -> List[SourceRef]:
-    docs = ia_search_random(rng, rows=max(50, wanted*15), query_bias=query_bias,
-                            allow_tokens=allow_tokens, strict=strict)
-    if not docs:
-        lw("No IA search results (strict filter?). Will try non-strict as fallback.")
-        docs = ia_search_random(rng, rows=max(50, wanted*15), query_bias=query_bias,
-                                allow_tokens=allow_tokens, strict=False)
+
+def pick_sources(
+    conn: sqlite3.Connection,
+    run_id: int,
+    rng: random.Random,
+    provider: Provider,
+    wanted: int,
+    query_bias: Optional[str],
+    allow_tokens: List[str],
+    strict: bool,
+    cache_dir: str,
+    pause_s: float = 0.6,
+) -> List[SourceRef]:
+    files = provider.search(rng, wanted, query_bias, allow_tokens, strict)
+    if not files:
+        lw("No search results (strict filter?). Will try non-strict as fallback.")
+        files = provider.search(rng, wanted, query_bias, allow_tokens, False)
     picked: List[SourceRef] = []
     tried = 0
-    for doc in docs:
-        if len(picked) >= wanted: break
-        ident = doc.get("identifier")
-        files = ia_pick_files_for_item(ident) if ident else []
-        rng.shuffle(files)
-        for f in files:
-            if len(picked) >= wanted: break
-            url = f["url"]
-            b = http_get_cached(url, cache_dir)
-            if not b or len(b) < 2048:
-                continue
-            try:
-                y, sr = load_audio_from_bytes(b, sr=TARGET_SR)
-                metrics = classify_source(y, sr)
-                bus = bus_of_source(metrics)
-                cur = conn.execute(
-                    "INSERT INTO sources(run_id,ia_identifier,ia_file,url,title,licenseurl,picked,bus,duration_s,zcr,flatness,onset_density) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (run_id, f.get("identifier"), f.get("name"), url, f.get("title"), f.get("licenseurl"),
-                     1, bus, float(len(y)/sr), float(metrics["zcr"]), float(metrics["flatness"]), float(metrics["onset_density"]))
+    for f in files:
+        if len(picked) >= wanted:
+            break
+        url = f.get("url")
+        b = provider.fetch(f, cache_dir)
+        if not url or not b or len(b) < 2048:
+            continue
+        try:
+            y, sr = load_audio_from_bytes(b, sr=TARGET_SR)
+            metrics = classify_source(y, sr)
+            bus = bus_of_source(metrics)
+            cur = conn.execute(
+                "INSERT INTO sources(run_id,ia_identifier,ia_file,url,title,licenseurl,picked,bus,duration_s,zcr,flatness,onset_density) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    f.get("identifier"),
+                    f.get("name"),
+                    url,
+                    f.get("title"),
+                    provider.license(f),
+                    1,
+                    bus,
+                    float(len(y) / sr),
+                    float(metrics["zcr"]),
+                    float(metrics["flatness"]),
+                    float(metrics["onset_density"]),
+                ),
+            )
+            sid = cur.lastrowid
+            picked.append(
+                SourceRef(
+                    sid,
+                    url,
+                    f.get("identifier"),
+                    f.get("name"),
+                    f.get("title"),
+                    provider.license(f),
+                    y,
+                    sr,
+                    bus,
+                    metrics,
                 )
-                sid = cur.lastrowid
-                picked.append(SourceRef(sid, url, f.get("identifier"), f.get("name"), f.get("title"),
-                                        f.get("licenseurl"), y, sr, bus, metrics))
-                li(f"Loaded source #{len(picked)} [{bus}] len={len(y)/sr:.1f}s  zcr={metrics['zcr']:.3f} flat={metrics['flatness']:.3f} dens={metrics['onset_density']:.2f}/s")
-            except Exception as e:
-                lw(f"Decode/classify failed: {e}")
-            tried += 1
-            time.sleep(pause_s * (0.75 + 0.5*rng.random()))
-        if tried > wanted*18 and picked:
+            )
+            li(
+                f"Loaded source #{len(picked)} [{bus}] len={len(y)/sr:.1f}s  zcr={metrics['zcr']:.3f} flat={metrics['flatness']:.3f} dens={metrics['onset_density']:.2f}/s"
+            )
+        except Exception as e:
+            lw(f"Decode/classify failed: {e}")
+        tried += 1
+        time.sleep(pause_s * (0.75 + 0.5 * rng.random()))
+        if tried > wanted * 18 and picked:
             break
     if not picked:
         li("Synthesizing emergency noise and click sources.")
-        t = np.arange(TARGET_SR*8)/TARGET_SR
-        clicks = (np.sin(2*np.pi*1000*t)*(t%0.5<0.01)).astype(np.float32)*0.2
+        t = np.arange(TARGET_SR * 8) / TARGET_SR
+        clicks = (np.sin(2 * np.pi * 1000 * t) * (t % 0.5 < 0.01)).astype(np.float32) * 0.2
         cur = conn.execute(
             "INSERT INTO sources(run_id,ia_identifier,ia_file,url,title,licenseurl,picked,bus,duration_s,zcr,flatness,onset_density) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (run_id, None, None, "synth://clicks", "synthetic clicks", "publicdomain",
-             1, "perc", float(len(clicks)/TARGET_SR), 0.1, 0.4, 3.0)
+            (
+                run_id,
+                None,
+                None,
+                "synth://clicks",
+                "synthetic clicks",
+                "publicdomain",
+                1,
+                "perc",
+                float(len(clicks) / TARGET_SR),
+                0.1,
+                0.4,
+                3.0,
+            ),
         )
         sid1 = cur.lastrowid
-        picked.append(SourceRef(sid1, "synth://clicks", None, None, "synthetic clicks",
-                                "publicdomain", clicks, TARGET_SR, "perc",
-                                {"zcr":0.1,"flatness":0.4,"onset_density":3.0}))
-        noise = np.random.default_rng(0).standard_normal(int(TARGET_SR*8)).astype(np.float32)*0.03
+        picked.append(
+            SourceRef(
+                sid1,
+                "synth://clicks",
+                None,
+                None,
+                "synthetic clicks",
+                "publicdomain",
+                clicks,
+                TARGET_SR,
+                "perc",
+                {"zcr": 0.1, "flatness": 0.4, "onset_density": 3.0},
+            )
+        )
+        noise = (
+            np.random.default_rng(0)
+            .standard_normal(int(TARGET_SR * 8))
+            .astype(np.float32)
+            * 0.03
+        )
         cur = conn.execute(
             "INSERT INTO sources(run_id,ia_identifier,ia_file,url,title,licenseurl,picked,bus,duration_s,zcr,flatness,onset_density) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (run_id, None, None, "synth://noise", "synthetic noise", "publicdomain",
-             1, "tex", float(len(noise)/TARGET_SR), 0.05, 0.9, 0.2)
+            (
+                run_id,
+                None,
+                None,
+                "synth://noise",
+                "synthetic noise",
+                "publicdomain",
+                1,
+                "tex",
+                float(len(noise) / TARGET_SR),
+                0.05,
+                0.9,
+                0.2,
+            ),
         )
         sid2 = cur.lastrowid
-        picked.append(SourceRef(sid2, "synth://noise", None, None, "synthetic noise",
-                                "publicdomain", noise, TARGET_SR, "tex",
-                                {"zcr":0.05,"flatness":0.9,"onset_density":0.2}))
+        picked.append(
+            SourceRef(
+                sid2,
+                "synth://noise",
+                None,
+                None,
+                "synthetic noise",
+                "publicdomain",
+                noise,
+                TARGET_SR,
+                "tex",
+                {"zcr": 0.05, "flatness": 0.9, "onset_density": 0.2},
+            )
+        )
     return picked
 
 
-def preview_sources(rng: random.Random, wanted: int, query_bias: Optional[str],
-                    allow_tokens: List[str], strict: bool) -> List[Dict[str, Optional[str]]]:
+def preview_sources(
+    provider: Provider,
+    rng: random.Random,
+    wanted: int,
+    query_bias: Optional[str],
+    allow_tokens: List[str],
+    strict: bool,
+) -> List[Dict[str, Optional[str]]]:
     """Plan candidate sources without downloading audio."""
-    docs = ia_search_random(rng, rows=max(50, wanted * 15),
-                            query_bias=query_bias, allow_tokens=allow_tokens, strict=strict)
-    if not docs:
-        docs = ia_search_random(rng, rows=max(50, wanted * 15),
-                                query_bias=query_bias, allow_tokens=allow_tokens, strict=False)
+    files = provider.search(rng, wanted, query_bias, allow_tokens, strict)
+    if not files:
+        files = provider.search(rng, wanted, query_bias, allow_tokens, False)
     planned: List[Dict[str, Optional[str]]] = []
-    for doc in docs:
-        if len(planned) >= wanted:
-            break
-        ident = doc.get("identifier")
-        files = ia_pick_files_for_item(ident) if ident else []
-        rng.shuffle(files)
-        for f in files:
-            planned.append({
+    for f in files:
+        planned.append(
+            {
                 "identifier": f.get("identifier"),
                 "file": f.get("name"),
                 "title": f.get("title"),
-                "licenseurl": f.get("licenseurl"),
+                "licenseurl": provider.license(f),
                 "url": f.get("url"),
-            })
-            if len(planned) >= wanted:
-                break
+            }
+        )
+        if len(planned) >= wanted:
+            break
     return planned
 
 def choose_by_bus(sources: List[SourceRef], bus: str, rng: random.Random) -> SourceRef:
