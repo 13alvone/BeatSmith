@@ -6,23 +6,33 @@ from typing import List, Dict, Optional
 
 import requests
 
-from . import lw, ld
+from .. import lw, ld
+from . import AUDIO_EXTS, license_ok
 
 IA_ADV_URL = "https://archive.org/advancedsearch.php"
 IA_META_URL = "https://archive.org/metadata/"
-AUDIO_EXTS = {".wav", ".wave", ".aif", ".aiff", ".flac", ".mp3", ".ogg", ".oga", ".m4a"}
 
 
-def _get_with_retry(url: str, *, params=None, headers=None, timeout=20,
-                     stream=False, max_retries: int = 3, backoff: float = 1.0):
-    """requests.get with retries and exponential backoff.
-
-    Retries on exceptions as well as 429 and 5xx responses. Returns the
-    successful ``requests.Response`` or ``None`` if all attempts fail.
-    """
+def _get_with_retry(
+    url: str,
+    *,
+    params=None,
+    headers=None,
+    timeout=20,
+    stream=False,
+    max_retries: int = 3,
+    backoff: float = 1.0,
+):
+    """requests.get with retries and exponential backoff."""
     for attempt in range(max_retries):
         try:
-            r = requests.get(url, params=params, headers=headers, timeout=timeout, stream=stream)
+            r = requests.get(
+                url,
+                params=params,
+                headers=headers,
+                timeout=timeout,
+                stream=stream,
+            )
             if r.status_code == 429 or r.status_code >= 500:
                 wait = backoff
                 if r.status_code == 429:
@@ -47,17 +57,14 @@ def _get_with_retry(url: str, *, params=None, headers=None, timeout=20,
     lw(f"Exceeded max retries for {url}")
     return None
 
-def ia_license_ok(licenseurl: Optional[str], allow_tokens: List[str]) -> bool:
-    if not licenseurl:
-        return False
-    low = licenseurl.lower()
-    for tok in allow_tokens:
-        if tok.strip() and tok.strip().lower() in low:
-            return True
-    return False
 
-def ia_search_random(rng: random.Random, rows: int, query_bias: Optional[str],
-                     allow_tokens: List[str], strict: bool) -> List[Dict]:
+def ia_search_random(
+    rng: random.Random,
+    rows: int,
+    query_bias: Optional[str],
+    allow_tokens: List[str],
+    strict: bool,
+) -> List[Dict]:
     q_parts = ['mediatype:(audio)']
     if query_bias:
         q_parts.append(f'({query_bias})')
@@ -84,9 +91,10 @@ def ia_search_random(rng: random.Random, rows: int, query_bias: Optional[str],
         r.close()
     docs = data.get("response", {}).get("docs", [])
     if strict:
-        docs = [d for d in docs if ia_license_ok(d.get("licenseurl"), allow_tokens)]
+        docs = [d for d in docs if license_ok(d.get("licenseurl"), allow_tokens)]
     rng.shuffle(docs)
     return docs
+
 
 def ia_pick_files_for_item(identifier: str) -> List[Dict]:
     url = IA_META_URL + identifier
@@ -108,21 +116,30 @@ def ia_pick_files_for_item(identifier: str) -> List[Dict]:
         name = f.get("name") or ""
         lower = name.lower()
         if any(lower.endswith(ext) for ext in AUDIO_EXTS):
-            picked.append({
-                "identifier": identifier,
-                "name": name,
-                "title": meta.get("metadata", {}).get("title"),
-                "licenseurl": meta.get("metadata", {}).get("licenseurl"),
-                "url": f"https://archive.org/download/{identifier}/{name}"
-            })
+            picked.append(
+                {
+                    "identifier": identifier,
+                    "name": name,
+                    "title": meta.get("metadata", {}).get("title"),
+                    "licenseurl": meta.get("metadata", {}).get("licenseurl"),
+                    "url": f"https://archive.org/download/{identifier}/{name}",
+                }
+            )
     return picked
+
 
 def cache_path_for(url: str, cache_dir: str) -> str:
     os.makedirs(cache_dir, exist_ok=True)
     h = hashlib.sha256(url.encode("utf-8")).hexdigest()
     return os.path.join(cache_dir, h + ".bin")
 
-def http_get_cached(url: str, cache_dir: str, timeout: int = 30, max_bytes: int = 50_000_000) -> Optional[bytes]:
+
+def http_get_cached(
+    url: str,
+    cache_dir: str,
+    timeout: int = 30,
+    max_bytes: int = 50_000_000,
+) -> Optional[bytes]:
     path = cache_path_for(url, cache_dir)
     if os.path.isfile(path):
         try:
@@ -160,3 +177,38 @@ def http_get_cached(url: str, cache_dir: str, timeout: int = 30, max_bytes: int 
     except Exception as e:
         lw(f"Download failed: {e} :: {url}")
         return None
+
+
+class InternetArchiveProvider:
+    def search(
+        self,
+        rng: random.Random,
+        wanted: int,
+        query_bias: Optional[str],
+        allow_tokens: List[str],
+        strict: bool,
+    ) -> List[Dict]:
+        docs = ia_search_random(
+            rng,
+            rows=max(50, wanted * 15),
+            query_bias=query_bias,
+            allow_tokens=allow_tokens,
+            strict=strict,
+        )
+        files: List[Dict] = []
+        for doc in docs:
+            ident = doc.get("identifier")
+            files.extend(ia_pick_files_for_item(ident) if ident else [])
+            if len(files) >= wanted * 3:
+                break
+        rng.shuffle(files)
+        return files
+
+    def fetch(self, file_info: Dict, cache_dir: str) -> Optional[bytes]:
+        url = file_info.get("url")
+        if not url:
+            return None
+        return http_get_cached(url, cache_dir)
+
+    def license(self, file_info: Dict) -> Optional[str]:
+        return file_info.get("licenseurl")

@@ -9,16 +9,18 @@ from typing import Any, Dict
 import numpy as np
 import soundfile as sf
 
-from . import li, lw, ld, le, log
+from . import li, lw, le, log
 from .db import db_open
 from .audio import (
-    MeasureSpec, parse_sig_map, seconds_per_measure, seeded_rng, normalize_peak,
+    parse_sig_map, seconds_per_measure, seeded_rng, normalize_peak,
     load_audio_file, pick_sources, build_measures, assemble_track, TARGET_SR,
     preview_sources,
 )
 from .fx import (
     compressor, eq_three_band, reverb_schroeder, tremolo, phaser, echo, lookahead_sidechain
 )
+from .providers.internet_archive import InternetArchiveProvider
+from .providers.local import LocalProvider
 
 # ---------------------------- Presets ----------------------------
 def apply_preset(args: argparse.Namespace):
@@ -103,15 +105,16 @@ def autopilot_config(rng) -> Dict[str, Any]:
 # ---------------------------- CLI ----------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="BeatSmith v3: pull CC/PD audio from Internet Archive, onset-align slices per signature map, run percussive+texture buses, FX, and render a beat."
+        description="BeatSmith v3: pull CC/PD audio from selected providers, onset-align slices per signature map, run percussive+texture buses, FX, and render a beat."
     )
     p.add_argument("out_dir", nargs="?", default=None, help="Output directory (created if missing).")
     p.add_argument("sig_map", nargs="?", default=None, type=parse_sig_map, help="Signature map like '4/4(4),5/4(3),6/8(5)'.")
     p.add_argument("--bpm", type=float, default=120.0, help="Beats per minute (default: 120).")
     p.add_argument("--seed", type=str, default=None, help="Deterministic seed.")
     p.add_argument("--salt", type=str, default=None, help="Additional salt for alternate takes.")
-    p.add_argument("--num-sources", type=int, default=6, help="How many IA sources to fetch (default: 6).")
-    p.add_argument("--query-bias", type=str, default=None, help="Optional IA search bias string.")
+    p.add_argument("--num-sources", type=int, default=6, help="How many sources to fetch (default: 6).")
+    p.add_argument("--query-bias", type=str, default=None, help="Optional search bias string.")
+    p.add_argument("--provider", choices=["ia", "local"], default="ia", help="Audio provider (default: ia).")
     p.add_argument("--license-allow", type=str, default="cc0,creativecommons,public domain,publicdomain,cc-by,cc-by-sa", help="Comma list of license tokens allowed.")
     p.add_argument("--strict-license", action="store_true", help="Enforce license allow-list strictly (no fallback).")
     p.add_argument("--cache-dir", type=str, default=os.path.expanduser("~/.beatsmith/cache"), help="Download cache directory.")
@@ -166,16 +169,24 @@ def main():
                 setattr(args, k, v)
     args.seed = seed
     apply_preset(args)
+    if args.provider == "local":
+        provider = LocalProvider()
+    else:
+        provider = InternetArchiveProvider()
     if args.dry_run:
         measures = build_measures(args.sig_map)
         total_sec = sum(seconds_per_measure(args.bpm, n, d) for n, d in measures)
         li(f"Total measures: {len(measures)}  est length ≈ {total_sec:.1f}s")
         allow_tokens = [t.strip() for t in (args.license_allow or "").split(",") if t.strip()]
         strict = bool(args.strict_license)
-        li("Planning Internet Archive sources...")
+        li("Planning sources...")
         plans = preview_sources(
-            rng, wanted=max(2, args.num_sources),
-            query_bias=args.query_bias, allow_tokens=allow_tokens, strict=strict,
+            provider,
+            rng,
+            wanted=max(2, args.num_sources),
+            query_bias=args.query_bias,
+            allow_tokens=allow_tokens,
+            strict=strict,
         )
         for idx, pinfo in enumerate(plans, 1):
             title = pinfo.get("title") or pinfo.get("file") or "unknown"
@@ -220,11 +231,17 @@ def main():
         li("FX: " + ", ".join(fx_bits))
     allow_tokens = [t.strip() for t in (args.license_allow or "").split(",") if t.strip()]
     strict = bool(args.strict_license)
-    li("Selecting Internet Archive sources...")
+    li("Selecting sources...")
     sources = pick_sources(
-        conn, run_id, rng, wanted=max(2, args.num_sources),
-        query_bias=args.query_bias, allow_tokens=allow_tokens, strict=strict,
-        cache_dir=args.cache_dir
+        conn,
+        run_id,
+        rng,
+        provider,
+        wanted=max(2, args.num_sources),
+        query_bias=args.query_bias,
+        allow_tokens=allow_tokens,
+        strict=strict,
+        cache_dir=args.cache_dir,
     )
     if not sources:
         le("No sources available, aborting.")
