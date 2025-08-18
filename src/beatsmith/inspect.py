@@ -1,5 +1,5 @@
-import argparse
 from typing import Optional
+import argparse
 
 from . import li, le
 from .db import db_open, find_latest_db, read_last_run
