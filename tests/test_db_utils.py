@@ -1,4 +1,4 @@
-import time
+import time  # required for timing tests
 
 from beatsmith.db import db_open, find_latest_db, read_last_run
 
