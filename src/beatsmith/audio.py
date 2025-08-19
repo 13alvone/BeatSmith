@@ -6,6 +6,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict
+from urllib.parse import urlparse
 
 import numpy as np
 import soundfile as sf
@@ -51,12 +52,37 @@ def seeded_rng(seed: Optional[str], salt: Optional[str]) -> random.Random:
 # ---------------------------- Audio utils ----------------------------
 TARGET_SR = 44100
 
-def load_audio_from_bytes(b: bytes, sr: int = TARGET_SR) -> Tuple[np.ndarray, int]:
+
+def load_audio_from_bytes(
+    b: bytes, sr: int = TARGET_SR, filename: Optional[str] = None
+) -> Tuple[np.ndarray, int]:
+    """Decode audio from a byte string.
+
+    Parameters
+    ----------
+    b: bytes
+        Raw audio data.
+    sr: int
+        Target sample rate for decoding/resampling.
+    filename: Optional[str]
+        If provided, the file's name or URL. The suffix (e.g., ``.mp3``) will
+        be used for the temporary file to help backends choose the correct
+        decoder.
+    """
     import tempfile
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=True) as tmp:
+
+    suffix = ".bin"
+    if filename:
+        path = urlparse(filename).path
+        ext = os.path.splitext(os.path.basename(path))[1]
+        if ext:
+            suffix = ext
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
         tmp.write(b)
         tmp.flush()
         y, srr = librosa.load(tmp.name, sr=sr, mono=True)
+
     if not np.isfinite(y).any() or y.size == 0:
         raise ValueError("Decoded audio is empty/invalid")
     return y.astype(np.float32), srr
@@ -210,7 +236,10 @@ def pick_sources(
         if not url or not b or len(b) < 2048:
             continue
         try:
-            y, sr = load_audio_from_bytes(b, sr=TARGET_SR)
+            fname = f.get("name")
+            if not fname and url:
+                fname = os.path.basename(urlparse(url).path)
+            y, sr = load_audio_from_bytes(b, sr=TARGET_SR, filename=fname)
             metrics = classify_source(y, sr)
             bus = bus_of_source(metrics)
             cur = conn.execute(
