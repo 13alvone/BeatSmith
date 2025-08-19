@@ -1,5 +1,6 @@
 from typing import Optional
 import argparse
+from collections import defaultdict
 
 from . import li, le
 from .db import db_open, find_latest_db, read_last_run
@@ -33,6 +34,45 @@ def main(argv: Optional[list[str]] = None):
         for k in sorted(run["params"].keys()):
             li(f"  {k}: {run['params'][k]}")
     li(f"Sources: {run['num_sources']}  segments: {run['num_segments']}")
+
+    cur = conn.execute(
+        """
+        SELECT s.title, s.bus, s.licenseurl,
+               COUNT(seg.id) AS ct,
+               COALESCE(SUM(seg.dur_s), 0.0) AS dur
+        FROM sources s
+        LEFT JOIN segments seg ON seg.source_id = s.id
+        WHERE s.run_id = ?
+        GROUP BY s.id
+        ORDER BY s.bus, s.title
+        """,
+        (run["id"],),
+    )
+    rows = cur.fetchall()
+    if rows:
+        li("Source usage:")
+        for title, bus, lic, ct, dur in rows:
+            lic = lic or "-"
+            li(f"  {bus:<4} {ct:>3}x {dur:>6.2f}s {title} {lic}")
+
+    cur = conn.execute(
+        """
+        SELECT seg.measure_index, seg.bus, s.title
+        FROM segments seg
+        JOIN sources s ON seg.source_id = s.id
+        WHERE seg.run_id = ?
+        ORDER BY seg.measure_index, seg.bus
+        """,
+        (run["id"],),
+    )
+    rows = cur.fetchall()
+    if rows:
+        li("Segments:")
+        by_measure: dict[int, list[str]] = defaultdict(list)
+        for m, bus, title in rows:
+            by_measure[m].append(f"{bus}:{title}")
+        for m in sorted(by_measure):
+            li(f"  {m:03d}: " + ", ".join(by_measure[m]))
 
 
 __all__ = ["main"]
