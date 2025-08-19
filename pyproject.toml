@@ -19,6 +19,7 @@ beatsmith = "beatsmith.cli:main"
 test = [
     "pytest",
     "ruff",
+    "hypothesis",
 ]
 
 [build-system]
