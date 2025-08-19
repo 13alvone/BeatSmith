@@ -153,6 +153,57 @@ def pick_onset_aligned_window(y: np.ndarray, sr: int, dur_s: float, rng: random.
             best = (s0, s0+win, energy)
     return best
 
+
+def pick_beat_aligned_window(
+    y: np.ndarray,
+    sr: int,
+    dur_s: float,
+    rng: random.Random,
+    min_rms: float = 0.02,
+    attempts: int = 50,
+) -> Tuple[int, int, float]:
+    """Pick an audio window starting on a detected beat.
+
+    This mirrors :func:`pick_onset_aligned_window` but uses
+    :func:`librosa.beat.beat_track` to find beat locations and ensures that the
+    returned segment begins at one of those beats.  If no beats are detected,
+    the function falls back to a uniform scan similar to onset alignment.
+    """
+
+    n = len(y)
+    win = max(int(dur_s * sr), 1)
+    if n <= win:
+        reps = int(math.ceil(win / max(n, 1))) + 1
+        y = np.tile(y, reps)
+        n = len(y)
+
+    # Detect beat locations in samples
+    _, beats = librosa.beat.beat_track(y=y, sr=sr, units="samples")
+    beats = beats.astype(int)
+    beats = beats[beats < n - win]
+    if beats.size == 0:
+        # Fall back to fixed steps if no beats are detected
+        beats = np.arange(0, n - win, max(int(0.1 * sr), 512))
+
+    best = (0, win, 0.0)
+    for _ in range(attempts):
+        s0 = int(rng.choice(beats))
+        seg = y[s0 : s0 + win]
+        energy = float(np.sqrt(np.mean(seg ** 2) + 1e-12))
+        if energy > best[2]:
+            best = (s0, s0 + win, energy)
+        if energy >= min_rms:
+            return s0, s0 + win, energy
+
+    # Exhaustive search fallback
+    step = max(int(sr * 0.05), 256)
+    for s0 in range(0, n - win, step):
+        seg = y[s0 : s0 + win]
+        energy = float(np.sqrt(np.mean(seg ** 2) + 1e-12))
+        if energy > best[2]:
+            best = (s0, s0 + win, energy)
+    return best
+
 def time_stretch_to_length(seg: np.ndarray, sr: int, target_len: int, mode: str) -> Tuple[np.ndarray, float]:
     cur = len(seg)
     if target_len <= 0 or cur <= 0:
@@ -405,10 +456,20 @@ def build_measures(sig_specs: List[MeasureSpec]) -> List[Tuple[int,int]]:
             out.append((ms.numer, ms.denom))
     return out
 
-def assemble_track(conn: sqlite3.Connection, run_id: int, sources: List[SourceRef],
-                     measures: List[Tuple[int,int]], bpm: float, rng: random.Random,
-                     min_rms: float, crossfade_s: float, tempo_mode: str,
-                     stems_dirs: Dict[str, str], microfill: bool) -> Tuple[np.ndarray, np.ndarray]:
+def assemble_track(
+    conn: sqlite3.Connection,
+    run_id: int,
+    sources: List[SourceRef],
+    measures: List[Tuple[int, int]],
+    bpm: float,
+    rng: random.Random,
+    min_rms: float,
+    crossfade_s: float,
+    tempo_mode: str,
+    stems_dirs: Dict[str, str],
+    microfill: bool,
+    beat_align: bool,
+) -> Tuple[np.ndarray, np.ndarray]:
     """Generate percussion and texture mixes from source material.
 
     Parameters
@@ -438,6 +499,8 @@ def assemble_track(conn: sqlite3.Connection, run_id: int, sources: List[SourceRe
     microfill : bool
         When ``True``, occasionally blend a short trailing snippet from the
         source into each texture segment to add variation.
+    beat_align : bool
+        If ``True``, windows are aligned to detected beats instead of onsets.
 
     Returns
     -------
@@ -451,19 +514,21 @@ def assemble_track(conn: sqlite3.Connection, run_id: int, sources: List[SourceRe
     Algorithm
     ---------
     1. For each measure, choose one percussion and one texture source.
-    2. Extract an onset-aligned window and stretch it to the measure's
-       duration based on ``tempo_mode``.
+    2. Extract a window aligned to onsets or beats (depending on
+       ``beat_align``) and stretch it to the measure's duration based on
+       ``tempo_mode``.
     3. Optionally apply a microfill to texture segments.
     4. Record metadata in ``conn`` and optionally write individual stems.
     5. Crossfade-concatenate the percussion and texture segments to obtain the
        two returned mixes.
     """
+    pick_fn = pick_beat_aligned_window if beat_align else pick_onset_aligned_window
     perc_chunks, tex_chunks = [], []
     for idx, (numer, denom) in enumerate(measures):
         dur = seconds_per_measure(bpm, numer, denom)
         target_len = int(dur * TARGET_SR)
         src_p = choose_by_bus(sources, "perc", rng)
-        s0, s1, e_p = pick_onset_aligned_window(src_p.y, src_p.sr, dur, rng=rng, min_rms=min_rms)
+        s0, s1, e_p = pick_fn(src_p.y, src_p.sr, dur, rng=rng, min_rms=min_rms)
         seg_p = src_p.y[s0:s1]
         seg_p, factor_p = time_stretch_to_length(seg_p, src_p.sr, target_len, tempo_mode)
         perc_chunks.append(seg_p.astype(np.float32))
@@ -472,7 +537,7 @@ def assemble_track(conn: sqlite3.Connection, run_id: int, sources: List[SourceRe
             (run_id, idx, numer, denom, "perc", float(s0/src_p.sr), float(dur), src_p.id, float(e_p), float(factor_p))
         )
         src_t = choose_by_bus(sources, "tex", rng)
-        s0t, s1t, e_t = pick_onset_aligned_window(src_t.y, src_t.sr, dur, rng=rng, min_rms=min_rms*0.5)
+        s0t, s1t, e_t = pick_fn(src_t.y, src_t.sr, dur, rng=rng, min_rms=min_rms * 0.5)
         seg_t = src_t.y[s0t:s1t]
         seg_t, factor_t = time_stretch_to_length(seg_t, src_t.sr, target_len, tempo_mode)
         if microfill and rng.random() < 0.25:

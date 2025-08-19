@@ -85,6 +85,7 @@ def autopilot_config(rng) -> Dict[str, Any]:
         "crossfade": rng.uniform(0.01, 0.04),
         "stems": rng.random() < 0.3,
         "microfill": rng.random() < 0.5,
+        "beat_align": rng.random() < 0.5,
         "tempo_fit": rng.choice(["off", "loose", "strict"]),
         "compress": rng.random() < 0.5,
         "eq_low": rng.uniform(-3, 3),
@@ -123,6 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tempo-fit", choices=["off","loose","strict"], default="strict", help="Time-stretch mode to fit global measure length.")
     p.add_argument("--stems", action="store_true", help="Write stems per bus/measure.")
     p.add_argument("--microfill", action="store_true", help="Enable tiny end-of-measure fills on texture bus.")
+    p.add_argument("--beat-align", action="store_true", help="Align slices to detected beats instead of onsets.")
     p.add_argument("--preset", type=str, default=None, help="Preset: boom-bap | edm | lofi")
     p.add_argument("--auto", action="store_true", help="Autopilot mode: randomize signature map, BPM, preset, sources, FX.")
     p.add_argument("--dry-run", action="store_true", help="Print planned sources and measures without downloading audio.")
@@ -249,11 +251,21 @@ def main():
     measures = build_measures(args.sig_map)
     total_sec = sum(seconds_per_measure(args.bpm, n, d) for n, d in measures)
     li(f"Total measures: {len(measures)}  est length ≈ {total_sec:.1f}s")
-    li("Assembling onset-aligned measures (perc + tex buses)...")
+    align_name = "beat" if args.beat_align else "onset"
+    li(f"Assembling {align_name}-aligned measures (perc + tex buses)...")
     mix_perc, mix_tex = assemble_track(
-        conn, run_id, sources, measures, bpm=args.bpm, rng=rng,
-        min_rms=args.min_rms, crossfade_s=args.crossfade,
-        tempo_mode=args.tempo_fit, stems_dirs=stems_dirs, microfill=args.microfill
+        conn,
+        run_id,
+        sources,
+        measures,
+        bpm=args.bpm,
+        rng=rng,
+        min_rms=args.min_rms,
+        crossfade_s=args.crossfade,
+        tempo_mode=args.tempo_fit,
+        stems_dirs=stems_dirs,
+        microfill=args.microfill,
+        beat_align=bool(args.beat_align),
     )
     tex_gain = 10 ** (-3.0 / 20.0)
     L = max(len(mix_perc), len(mix_tex))
