@@ -125,6 +125,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stems", action="store_true", help="Write stems per bus/measure.")
     p.add_argument("--microfill", action="store_true", help="Enable tiny end-of-measure fills on texture bus.")
     p.add_argument("--beat-align", action="store_true", help="Align slices to detected beats instead of onsets.")
+    p.add_argument(
+        "--no-boundary-refine",
+        dest="boundary_refine",
+        action="store_false",
+        help="Disable RMS-based refinement of slice boundaries.",
+    )
+    p.set_defaults(boundary_refine=True)
     p.add_argument("--preset", type=str, default=None, help="Preset: boom-bap | edm | lofi")
     p.add_argument("--auto", action="store_true", help="Autopilot mode: randomize signature map, BPM, preset, sources, FX.")
     p.add_argument("--dry-run", action="store_true", help="Print planned sources and measures without downloading audio.")
@@ -266,6 +273,7 @@ def main():
         stems_dirs=stems_dirs,
         microfill=args.microfill,
         beat_align=bool(args.beat_align),
+        refine_boundaries=args.boundary_refine,
     )
     tex_gain = 10 ** (-3.0 / 20.0)
     L = max(len(mix_perc), len(mix_tex))

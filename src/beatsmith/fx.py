@@ -3,8 +3,6 @@ import numpy as np
 from scipy.signal import butter, lfilter
 import librosa
 
-from . import li, lw
-
 __all__ = [
     "rms_envelope", "compressor", "eq_three_band", "reverb_schroeder",
     "tremolo", "phaser", "echo", "lookahead_sidechain"
@@ -110,7 +108,7 @@ def phaser(y: np.ndarray, sr: int, rate_hz=0.2, depth=0.6, stages=4) -> np.ndarr
         delay = (mod * depth * 1024).astype(int) + 1
         buf = np.zeros(2048, dtype=np.float32)
         for i in range(len(out)):
-            d = delay[i]
+            d = delay[i]  # noqa: F841
             out[i] = out[i] + buf[i % 2048]
             buf[i % 2048] = out[i] - buf[i % 2048]
     return out

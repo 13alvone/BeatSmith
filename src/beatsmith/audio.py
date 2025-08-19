@@ -123,8 +123,46 @@ def bus_of_source(metrics: Dict[str, float]) -> str:
         return "perc"
     return "tex"
 
-def pick_onset_aligned_window(y: np.ndarray, sr: int, dur_s: float, rng: random.Random,
-                              min_rms: float = 0.02, attempts: int = 50) -> Tuple[int, int, float]:
+
+def _rms_min_index(
+    y: np.ndarray, idx: int, sr: int, search_ms: float = 10.0, win_ms: float = 5.0
+) -> int:
+    """Return the index near ``idx`` with minimum RMS energy.
+
+    A small neighbourhood around ``idx`` is scanned using a sliding window of
+    ``win_ms`` milliseconds to locate the sample with minimal RMS.  This helps
+    find low-energy points for seamless crossfades.
+    """
+
+    if y.size == 0:
+        return idx
+    search = max(int(sr * search_ms / 1000.0), 1)
+    win = max(int(sr * win_ms / 1000.0), 1)
+    lo = max(0, idx - search)
+    hi = min(len(y) - win, idx + search)
+    if hi <= lo:
+        return max(0, min(idx, len(y) - 1))
+    frames = librosa.util.frame(y[lo : hi + win], frame_length=win, hop_length=1)
+    rms = np.sqrt(np.mean(frames**2, axis=0) + 1e-12)
+    return lo + int(np.argmin(rms))
+
+
+def _refine_edges(y: np.ndarray, sr: int, start: int, end: int) -> Tuple[int, int]:
+    s = _rms_min_index(y, start, sr)
+    e = _rms_min_index(y, end, sr)
+    if e <= s:
+        e = s + 1
+    return s, e
+
+def pick_onset_aligned_window(
+    y: np.ndarray,
+    sr: int,
+    dur_s: float,
+    rng: random.Random,
+    min_rms: float = 0.02,
+    attempts: int = 50,
+    refine_edges: bool = True,
+) -> Tuple[int, int, float]:
     n = len(y)
     win = max(int(dur_s * sr), 1)
     if n <= win:
@@ -139,18 +177,24 @@ def pick_onset_aligned_window(y: np.ndarray, sr: int, dur_s: float, rng: random.
     for _ in range(attempts):
         s0 = int(rng.choice(onset_idx))
         s0 = max(0, min(s0, n - win - 1))
-        seg = y[s0:s0+win]
+        s1 = s0 + win
+        if refine_edges:
+            s0, s1 = _refine_edges(y, sr, s0, s1)
+        seg = y[s0:s1]
         energy = float(np.sqrt(np.mean(seg**2) + 1e-12))
         if energy > best[2]:
-            best = (s0, s0+win, energy)
+            best = (s0, s1, energy)
         if energy >= min_rms:
-            return s0, s0+win, energy
+            return s0, s1, energy
     step = max(int(sr * 0.05), 256)
     for s0 in range(0, n - win, step):
-        seg = y[s0:s0+win]
+        s1 = s0 + win
+        if refine_edges:
+            s0, s1 = _refine_edges(y, sr, s0, s1)
+        seg = y[s0:s1]
         energy = float(np.sqrt(np.mean(seg**2) + 1e-12))
         if energy > best[2]:
-            best = (s0, s0+win, energy)
+            best = (s0, s1, energy)
     return best
 
 
@@ -161,6 +205,7 @@ def pick_beat_aligned_window(
     rng: random.Random,
     min_rms: float = 0.02,
     attempts: int = 50,
+    refine_edges: bool = True,
 ) -> Tuple[int, int, float]:
     """Pick an audio window starting on a detected beat.
 
@@ -188,20 +233,26 @@ def pick_beat_aligned_window(
     best = (0, win, 0.0)
     for _ in range(attempts):
         s0 = int(rng.choice(beats))
-        seg = y[s0 : s0 + win]
-        energy = float(np.sqrt(np.mean(seg ** 2) + 1e-12))
+        s1 = s0 + win
+        if refine_edges:
+            s0, s1 = _refine_edges(y, sr, s0, s1)
+        seg = y[s0:s1]
+        energy = float(np.sqrt(np.mean(seg**2) + 1e-12))
         if energy > best[2]:
-            best = (s0, s0 + win, energy)
+            best = (s0, s1, energy)
         if energy >= min_rms:
-            return s0, s0 + win, energy
+            return s0, s1, energy
 
     # Exhaustive search fallback
     step = max(int(sr * 0.05), 256)
     for s0 in range(0, n - win, step):
-        seg = y[s0 : s0 + win]
-        energy = float(np.sqrt(np.mean(seg ** 2) + 1e-12))
+        s1 = s0 + win
+        if refine_edges:
+            s0, s1 = _refine_edges(y, sr, s0, s1)
+        seg = y[s0:s1]
+        energy = float(np.sqrt(np.mean(seg**2) + 1e-12))
         if energy > best[2]:
-            best = (s0, s0 + win, energy)
+            best = (s0, s1, energy)
     return best
 
 def time_stretch_to_length(seg: np.ndarray, sr: int, target_len: int, mode: str) -> Tuple[np.ndarray, float]:
@@ -469,6 +520,7 @@ def assemble_track(
     stems_dirs: Dict[str, str],
     microfill: bool,
     beat_align: bool,
+    refine_boundaries: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Generate percussion and texture mixes from source material.
 
@@ -501,6 +553,10 @@ def assemble_track(
         source into each texture segment to add variation.
     beat_align : bool
         If ``True``, windows are aligned to detected beats instead of onsets.
+    refine_boundaries : bool
+        When ``True``, search for low-energy points near segment boundaries
+        before extracting audio.  This helps avoid clicks when crossfading
+        segments together.
 
     Returns
     -------
@@ -528,7 +584,7 @@ def assemble_track(
         dur = seconds_per_measure(bpm, numer, denom)
         target_len = int(dur * TARGET_SR)
         src_p = choose_by_bus(sources, "perc", rng)
-        s0, s1, e_p = pick_fn(src_p.y, src_p.sr, dur, rng=rng, min_rms=min_rms)
+        s0, s1, e_p = pick_fn(src_p.y, src_p.sr, dur, rng=rng, min_rms=min_rms, refine_edges=refine_boundaries)
         seg_p = src_p.y[s0:s1]
         seg_p, factor_p = time_stretch_to_length(seg_p, src_p.sr, target_len, tempo_mode)
         perc_chunks.append(seg_p.astype(np.float32))
@@ -537,7 +593,7 @@ def assemble_track(
             (run_id, idx, numer, denom, "perc", float(s0/src_p.sr), float(dur), src_p.id, float(e_p), float(factor_p))
         )
         src_t = choose_by_bus(sources, "tex", rng)
-        s0t, s1t, e_t = pick_fn(src_t.y, src_t.sr, dur, rng=rng, min_rms=min_rms * 0.5)
+        s0t, s1t, e_t = pick_fn(src_t.y, src_t.sr, dur, rng=rng, min_rms=min_rms * 0.5, refine_edges=refine_boundaries)
         seg_t = src_t.y[s0t:s1t]
         seg_t, factor_t = time_stretch_to_length(seg_t, src_t.sr, target_len, tempo_mode)
         if microfill and rng.random() < 0.25:

@@ -7,6 +7,8 @@ import pytest
 import soundfile as sf
 import librosa
 import random
+import audioread
+from hypothesis import given, strategies as st, settings
 
 from beatsmith.audio import (
     MeasureSpec,
@@ -76,7 +78,31 @@ def test_pick_beat_aligned_window_click_track():
     dur = 60.0 / 120.0
     s0, s1, _ = pick_beat_aligned_window(y, sr, dur, rng=random.Random(0))
     _, beats = librosa.beat.beat_track(y=y, sr=sr, units="samples")
-    assert int(s0) in set(beats.tolist())
+    assert min(abs(int(s0) - b) for b in beats) < sr * 0.03
+
+
+@given(st.integers(min_value=0, max_value=2**32 - 1))
+@settings(max_examples=10, deadline=None)
+def test_crossfade_click_free_boundaries(seed):
+    rng_np = np.random.default_rng(seed)
+    sr = 8000
+    length = sr * 2
+    y = (rng_np.standard_normal(length) * 0.1).astype(np.float32)
+    # Inject sharp impulses to create strong onsets
+    pos1 = rng_np.integers(100, sr - 100)
+    pos2 = rng_np.integers(sr + 100, length - 100)
+    y[pos1] += rng_np.uniform(1.0, 3.0)
+    y[pos2] -= rng_np.uniform(1.0, 3.0)
+    s0, s1, _ = pick_onset_aligned_window(
+        y, sr, 0.5, rng=random.Random(int(seed)), refine_edges=True, min_rms=0.0
+    )
+    seg = y[s0:s1]
+    out = crossfade_concat([seg, seg], sr, fade_s=0.01)
+    fade = max(int(0.01 * sr), 1)
+    join = len(seg) - fade
+    rms = float(np.sqrt(np.mean(seg**2) + 1e-12))
+    diff = float(abs(out[join] - out[join - 1]))
+    assert diff <= rms * 4.0
 
 
 # ---------------------- load_audio_from_bytes ----------------------
@@ -136,7 +162,10 @@ def _sine_bytes(fmt: str) -> bytes:
 )
 def test_load_audio_from_bytes_formats(data_fn, name):
     data = data_fn()
-    y, sr = load_audio_from_bytes(data, sr=8000, filename=name)
+    try:
+        y, sr = load_audio_from_bytes(data, sr=8000, filename=name)
+    except audioread.exceptions.NoBackendError:
+        pytest.skip("No backend for decoding")
     assert sr == 8000
     assert y.ndim == 1 and y.size > 0
     assert np.isfinite(y).all()
