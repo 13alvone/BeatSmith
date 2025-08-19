@@ -88,7 +88,7 @@ BeatSmith prints the chosen `seed`/`salt`, `sig_map`, preset, BPM, query bias, F
         python -m beatsmith out "4/4(8)" --dry-run
 
 ### 4) Inspect previous run
-        # Show summary of latest beatsmith_v3.db under current directory
+        # `inspect` subcommand: summarize latest beatsmith_v3.db under current directory
         beatsmith inspect
 
 ### 5) Presets
