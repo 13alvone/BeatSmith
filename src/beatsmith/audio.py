@@ -78,10 +78,15 @@ def load_audio_from_bytes(
         if ext:
             suffix = ext
 
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp_path = tmp.name
         tmp.write(b)
         tmp.flush()
-        y, srr = librosa.load(tmp.name, sr=sr, mono=True)
+
+    try:
+        y, srr = librosa.load(tmp_path, sr=sr, mono=True)
+    finally:
+        os.remove(tmp_path)
 
     if not np.isfinite(y).any() or y.size == 0:
         raise ValueError("Decoded audio is empty/invalid")
