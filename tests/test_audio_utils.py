@@ -5,6 +5,8 @@ import io
 import numpy as np
 import pytest
 import soundfile as sf
+import librosa
+import random
 
 from beatsmith.audio import (
     MeasureSpec,
@@ -12,6 +14,8 @@ from beatsmith.audio import (
     crossfade_concat,
     time_stretch_to_length,
     load_audio_from_bytes,
+    pick_onset_aligned_window,
+    pick_beat_aligned_window,
 )
 
 
@@ -48,6 +52,31 @@ def test_time_stretch_to_length_length(mode, target):
     seg = np.linspace(0, 1, 100).astype(np.float32)
     y, _ = time_stretch_to_length(seg, sr=100, target_len=target, mode=mode)
     assert len(y) == target
+
+
+# ---------------------- alignment window helpers ----------------------
+
+def _steady_click_track(sr=22050, bpm=120, beats=16):
+    beat_dur = 60.0 / bpm
+    times = np.arange(beats) * beat_dur
+    length = int((beats + 1) * beat_dur * sr)
+    y = librosa.clicks(times=times, sr=sr, click_duration=0.03, length=length)
+    return y.astype(np.float32), sr, int(round(beat_dur * sr))
+
+
+def test_pick_onset_aligned_window_click_track():
+    y, sr, beat_samples = _steady_click_track()
+    dur = 60.0 / 120.0
+    s0, s1, _ = pick_onset_aligned_window(y, sr, dur, rng=random.Random(0))
+    assert min(abs(s0 - i * beat_samples) for i in range(16)) < sr * 0.03
+
+
+def test_pick_beat_aligned_window_click_track():
+    y, sr, _ = _steady_click_track()
+    dur = 60.0 / 120.0
+    s0, s1, _ = pick_beat_aligned_window(y, sr, dur, rng=random.Random(0))
+    _, beats = librosa.beat.beat_track(y=y, sr=sr, units="samples")
+    assert int(s0) in set(beats.tolist())
 
 
 # ---------------------- load_audio_from_bytes ----------------------
