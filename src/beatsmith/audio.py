@@ -409,6 +409,55 @@ def assemble_track(conn: sqlite3.Connection, run_id: int, sources: List[SourceRe
                      measures: List[Tuple[int,int]], bpm: float, rng: random.Random,
                      min_rms: float, crossfade_s: float, tempo_mode: str,
                      stems_dirs: Dict[str, str], microfill: bool) -> Tuple[np.ndarray, np.ndarray]:
+    """Generate percussion and texture mixes from source material.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Database handle used to log each generated segment.
+    run_id : int
+        Identifier for the current generation run.
+    sources : List[SourceRef]
+        Pool of candidate sources with pre-loaded audio data.
+    measures : List[Tuple[int, int]]
+        Measure specifications given as ``(numerator, denominator)`` pairs.
+    bpm : float
+        Tempo of the output in beats per minute.
+    rng : random.Random
+        Random number generator for choosing sources and offsets.
+    min_rms : float
+        Minimum RMS energy allowed when selecting audio windows.
+    crossfade_s : float
+        Length of crossfades between consecutive segments, in seconds.
+    tempo_mode : str
+        Strategy for time-stretching segments to the target duration.
+    stems_dirs : Dict[str, str]
+        Optional mapping of stem types (``"perc"`` or ``"tex"``) to directory
+        paths where individual measure stems are written.  If empty, no stems
+        are saved.
+    microfill : bool
+        When ``True``, occasionally blend a short trailing snippet from the
+        source into each texture segment to add variation.
+
+    Returns
+    -------
+    mix_perc : np.ndarray
+        Final percussion mix produced by concatenating all percussion segments
+        with crossfades.
+    mix_tex : np.ndarray
+        Final texture mix produced by concatenating all texture segments with
+        crossfades.
+
+    Algorithm
+    ---------
+    1. For each measure, choose one percussion and one texture source.
+    2. Extract an onset-aligned window and stretch it to the measure's
+       duration based on ``tempo_mode``.
+    3. Optionally apply a microfill to texture segments.
+    4. Record metadata in ``conn`` and optionally write individual stems.
+    5. Crossfade-concatenate the percussion and texture segments to obtain the
+       two returned mixes.
+    """
     perc_chunks, tex_chunks = [], []
     for idx, (numer, denom) in enumerate(measures):
         dur = seconds_per_measure(bpm, numer, denom)
