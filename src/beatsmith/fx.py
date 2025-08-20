@@ -67,33 +67,49 @@ def eq_three_band(y: np.ndarray, sr: int, low_db=0.0, mid_db=0.0, high_db=0.0,
     return out.astype(np.float32)
 
 def reverb_schroeder(y: np.ndarray, sr: int, room_size=0.3, mix=0.2) -> np.ndarray:
+    """Simple Schroeder reverb implementation.
+
+    Internal processing is performed in ``float64`` for numerical stability and
+    the final mixed output is cast back to ``float32``.
+    """
+
     def comb(x, delay_ms=50.0, g=0.7):
         delay = int(sr * delay_ms / 1000.0)
-        buf = np.zeros(delay, dtype=np.float32)
-        out = np.zeros_like(x)
+        buf = np.zeros(delay, dtype=np.float64)
+        out = np.zeros_like(x, dtype=np.float64)
+        g = float(np.clip(g, -0.9999, 0.9999))
         for i in range(len(x)):
-            yi = x[i] + g * buf[i % delay]
+            idx = i % delay
+            yi = x[i] + g * buf[idx]
             out[i] = yi
-            buf[i % delay] = yi
-        return out
+            buf[idx] = yi
+        out = np.nan_to_num(out)
+        return np.clip(out, -1.0, 1.0)
 
     def allpass(x, delay_ms=5.0, g=0.7):
         delay = int(sr * delay_ms / 1000.0)
-        buf = np.zeros(delay, dtype=np.float32)
-        out = np.zeros_like(x)
+        buf = np.zeros(delay, dtype=np.float64)
+        out = np.zeros_like(x, dtype=np.float64)
+        g = float(np.clip(g, -0.9999, 0.9999))
         for i in range(len(x)):
-            yi = buf[i % delay] + x[i] - g * out[i-1 if i>0 else 0]
+            idx = i % delay
+            yi = -g * x[i] + buf[idx]
             out[i] = yi
-            buf[i % delay] = x[i] + g * yi
-        return out
+            buf[idx] = x[i] + g * yi
+        out = np.nan_to_num(out)
+        return np.clip(out, -1.0, 1.0)
 
-    x = y.copy()
+    dry = y.astype(np.float64, copy=False)
+    x = dry.copy()
     for dm in [50, 56, 61, 68]:
-        x = comb(x, delay_ms=dm, g=0.805 + room_size*0.1)
+        x = comb(x, delay_ms=dm, g=0.805 + room_size * 0.1)
     for dm in [5, 1.7, 6.3]:
         x = allpass(x, delay_ms=dm, g=0.7)
-    wet = x.astype(np.float32)
-    return (1.0 - mix) * y + mix * wet
+    wet = x
+    out = (1.0 - mix) * dry + mix * wet
+    out = np.nan_to_num(out)
+    out = np.clip(out, -1.0, 1.0)
+    return out.astype(np.float32)
 
 def tremolo(y: np.ndarray, sr: int, rate_hz=5.0, depth=0.5) -> np.ndarray:
     t = np.arange(len(y)) / sr
