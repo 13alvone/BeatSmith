@@ -14,7 +14,7 @@ from .db import db_open
 from .audio import (
     parse_sig_map, seconds_per_measure, seeded_rng, normalize_peak,
     load_audio_file, pick_sources, build_measures, assemble_track, TARGET_SR,
-    preview_sources,
+    preview_sources, safe_audio,
 )
 from .fx import (
     compressor, eq_three_band, reverb_schroeder, tremolo, phaser, echo, lookahead_sidechain
@@ -313,6 +313,7 @@ def main():
         wet = echo(mix.copy(), TARGET_SR, delay_ms=args.echo_ms, feedback=args.echo_fb, mix=args.echo_mix)
         mix = (0.75*mix + 0.25*wet).astype(np.float32)
     mix = normalize_peak(mix, peak_db=-0.8)
+    mix = safe_audio(mix)
     out_wav = os.path.join(out_dir, f"beatsmith_v3_{run_id}.wav")
     sf.write(out_wav, mix, TARGET_SR, subtype="PCM_16")
     li(f"Wrote: {out_wav}")

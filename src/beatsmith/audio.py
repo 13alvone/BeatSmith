@@ -104,6 +104,17 @@ def normalize_peak(y: np.ndarray, peak_db: float = -0.8) -> np.ndarray:
     g = target / peak
     return (y * g).astype(np.float32)
 
+
+def safe_audio(y: np.ndarray) -> np.ndarray:
+    """Clamp audio to [-1, 1] and remove NaN/Inf values.
+
+    Any non-finite values are replaced with zeros before clamping to the
+    valid floating-point audio range.  The result is always ``float32``.
+    """
+
+    y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+    return np.clip(y, -1.0, 1.0).astype(np.float32)
+
 def onset_envelope(y: np.ndarray, sr: int) -> Tuple[np.ndarray, np.ndarray]:
     oenv = librosa.onset.onset_strength(y=y, sr=sr)
     times = librosa.times_like(oenv, sr=sr)
@@ -610,9 +621,19 @@ def assemble_track(
         )
         if stems_dirs:
             if stems_dirs.get("perc"):
-                sf.write(os.path.join(stems_dirs["perc"], f"perc_{idx:03d}_{numer}-{denom}.wav"), seg_p, TARGET_SR, subtype="PCM_16")
+                sf.write(
+                    os.path.join(stems_dirs["perc"], f"perc_{idx:03d}_{numer}-{denom}.wav"),
+                    safe_audio(seg_p),
+                    TARGET_SR,
+                    subtype="PCM_16",
+                )
             if stems_dirs.get("tex"):
-                sf.write(os.path.join(stems_dirs["tex"], f"tex_{idx:03d}_{numer}-{denom}.wav"), seg_t, TARGET_SR, subtype="PCM_16")
+                sf.write(
+                    os.path.join(stems_dirs["tex"], f"tex_{idx:03d}_{numer}-{denom}.wav"),
+                    safe_audio(seg_t),
+                    TARGET_SR,
+                    subtype="PCM_16",
+                )
     conn.commit()
     mix_perc = crossfade_concat(perc_chunks, TARGET_SR, fade_s=crossfade_s)
     mix_tex  = crossfade_concat(tex_chunks, TARGET_SR, fade_s=crossfade_s*0.8)
