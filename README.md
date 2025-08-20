@@ -35,10 +35,18 @@ Deterministic, Internet Archive–powered beat builder that slices audible, onse
         # System requirements
         - Python 3.10+
         - ffmpeg (for decoding MP3/OGG/etc through librosa/audioread)
+            - macOS: `brew install ffmpeg`
+            - Debian/Ubuntu: `sudo apt install ffmpeg`
+            - Windows: https://ffmpeg.org/download.html or `choco install ffmpeg`
         - macOS/Linux/WSL tested; Windows should work with ffmpeg on PATH
 
+        # Verify ffmpeg is available
+        ffmpeg -version
+
         # Create env and install the project
-        python3 -m venv .venv && source .venv/bin/activate
+        python3 -m venv .venv
+        source .venv/bin/activate  # macOS/Linux
+        .\.venv\Scripts\activate  # Windows PowerShell
         pip install -e .  # or `pip install .`
 
 ---
