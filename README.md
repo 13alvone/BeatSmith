@@ -18,13 +18,10 @@ Deterministic, Internet Archive–powered beat builder that slices audible, onse
 ---
 
 ## Quick Start (Autopilot: no flags)
-        # Python 3.10+ recommended. ffmpeg required by librosa/audioread.
-        python3 -m venv .venv && source .venv/bin/activate
-        # Install the project; pyproject.toml defines dependencies.
-        pip install -e .  # or `pip install .`
+See [Installation](#installation) to set up Python, ffmpeg, and the project's dependencies.
+Once installed, run with zero args — BeatSmith v3 will pick everything (sig map, BPM, preset, sources, FX):
 
-	# Run with zero args — BeatSmith v3 will pick everything (sig map, BPM, preset, sources, FX).
-	python -m beatsmith
+        python -m beatsmith
 
 	# Output directory is created automatically (e.g., ./beatsmith_auto/bs_YYYYMMDD_HHMMSS_XXXX)
 	# The final WAV and beatsmith_v3.db (SQLite) live there; stems if Autopilot enabled them.
@@ -32,6 +29,8 @@ Deterministic, Internet Archive–powered beat builder that slices audible, onse
 ---
 
 ## Installation
+Python 3.10+ and `ffmpeg` are required. Use a virtual environment to keep dependencies isolated:
+
         # System requirements
         - Python 3.10+
         - ffmpeg (for decoding MP3/OGG/etc through librosa/audioread)
