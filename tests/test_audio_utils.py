@@ -34,6 +34,15 @@ def test_parse_sig_map_invalid():
         parse_sig_map("4/5(2)")
 
 
+@given(st.text())
+@settings(max_examples=50, deadline=None)
+def test_parse_sig_map_fuzz(s):
+    try:
+        parse_sig_map(s)
+    except argparse.ArgumentTypeError:
+        pass
+
+
 # ---------------------- crossfade_concat ----------------------
 
 def test_crossfade_concat_continuity():
@@ -46,6 +55,32 @@ def test_crossfade_concat_continuity():
     assert np.allclose(out, 1.0, atol=1e-6)
 
 
+@given(
+    a_val=st.floats(-1.0, 1.0),
+    b_val=st.floats(-1.0, 1.0),
+    length=st.integers(min_value=2, max_value=1000),
+    fade=st.integers(min_value=1, max_value=500),
+)
+@settings(max_examples=50, deadline=None)
+def test_crossfade_concat_property(a_val, b_val, length, fade):
+    sr = 1000
+    a = np.full(length, a_val, dtype=np.float32)
+    b = np.full(length, b_val, dtype=np.float32)
+    fade = min(fade, length)
+    out = crossfade_concat([a, b], sr, fade_s=fade / sr)
+    m = min(fade, len(a), len(b))
+    if m > 1:
+        t = np.linspace(0, 1, m, dtype=np.float32)
+        expected = np.concatenate([
+            np.full(len(a) - m, a_val, dtype=np.float32),
+            a_val * (1.0 - t) + b_val * t,
+            np.full(len(b) - m, b_val, dtype=np.float32),
+        ])
+    else:
+        expected = np.concatenate([a, b])
+    assert np.allclose(out, expected, atol=1e-5)
+
+
 # ---------------------- time_stretch_to_length ----------------------
 
 @pytest.mark.parametrize("mode", ["off", "loose", "strict"])
@@ -54,6 +89,25 @@ def test_time_stretch_to_length_length(mode, target):
     seg = np.linspace(0, 1, 100).astype(np.float32)
     y, _ = time_stretch_to_length(seg, sr=100, target_len=target, mode=mode)
     assert len(y) == target
+
+
+@given(
+    seg_len=st.integers(min_value=2048, max_value=4096),
+    target=st.integers(min_value=1024, max_value=4096),
+    mode=st.sampled_from(["off", "loose", "strict"]),
+    seed=st.integers(min_value=0, max_value=2**32 - 1),
+)
+@settings(max_examples=10, deadline=None)
+def test_time_stretch_invariants(seg_len, target, mode, seed):
+    rng = np.random.default_rng(seed)
+    seg = rng.standard_normal(seg_len).astype(np.float32)
+    y, factor = time_stretch_to_length(seg, sr=22050, target_len=target, mode=mode)
+    assert len(y) == target
+    in_rms = float(np.sqrt(np.mean(seg**2)))
+    out_rms = float(np.sqrt(np.mean(y**2)))
+    assert not np.isnan(out_rms)
+    if in_rms > 0:
+        assert out_rms <= in_rms * 10.0
 
 
 # ---------------------- alignment window helpers ----------------------

@@ -20,4 +20,6 @@ jobs:
       - name: Lint
         run: ruff check tests
       - name: Test
+        env:
+          PYTHONHASHSEED: "0"
         run: pytest
