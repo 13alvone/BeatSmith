@@ -77,15 +77,15 @@ BeatSmith prints the chosen `seed`/`salt`, `sig_map`, preset, BPM, query bias, F
 	# 8 measures of 4/4 at 124 BPM, boom-bap preset, stems on
 	python -m beatsmith out "4/4(8)" --bpm 124 --preset boom-bap --stems
 
-	# Mixed signatures, license allow-list strict, more sources, tasteful FX
-	python -m beatsmith out "4/4(4),5/4(3),6/8(5)" --bpm 132 \
-		--license-allow "cc0,cc-by,public domain" --strict-license \
-		--num-sources 6 --tempo-fit strict --compress \
-		--eq-low +2 --eq-mid -1 --eq-high +3 \
-		--reverb-mix 0.22 --reverb-room 0.35 \
-		--tremolo-rate 5 --tremolo-depth 0.35 \
-		--echo-ms 320 --echo-fb 0.28 --echo-mix 0.22 \
-		--stems
+        # Mixed signatures, license allow-list strict, more sounds, tasteful FX
+        python -m beatsmith out "4/4(4),5/4(3),6/8(5)" --bpm 132 \
+                --license-allow "cc0,cc-by,public domain" --strict-license \
+                --num-sounds 32 --tempo-fit strict --compress \
+                --eq-low +2 --eq-mid -1 --eq-high +3 \
+                --reverb-mix 0.22 --reverb-room 0.35 \
+                --tremolo-rate 5 --tremolo-depth 0.35 \
+                --echo-ms 320 --echo-fb 0.28 --echo-mix 0.22 \
+                --stems
 
 	# Build on your existing loop with lookahead sidechain pumping
         python -m beatsmith out "4/4(16)" --bpm 124 --build-on ./my_loop.wav \
@@ -116,10 +116,11 @@ Presets bias EQ, FX, and query terms sensibly. You can still override any knob.
           --dry-run                   Print planned sources/measures and exit.
 	  --bpm FLOAT                 Global BPM (Autopilot picks a sane range per preset).
 	  --seed STR                  Deterministic seed.
-	  --salt STR                  Additional salt to create alternate takes deterministically.
-	  --num-sources INT           Number of IA sources to pull (default 6; Autopilot randomizes).
-	  --query-bias STR            IA search bias (Autopilot selects one).
-	  --license-allow STR         Comma list of allowed licenses (tokens matched in license URL).
+          --salt STR                  Additional salt to create alternate takes deterministically.
+          --num-sounds INT|A-B        Total slices or range to distribute (default random 15-30).
+          --query-bias STR            IA search bias (Autopilot selects one).
+          --num-sources INT           [Deprecated] Number of IA sources to pull (default 6).
+          --license-allow STR         Comma list of allowed licenses (tokens matched in license URL).
 	  --strict-license            Enforce allow-list strictly (no fallback).
 	  --cache-dir PATH            Download cache (~/.beatsmith/cache default).
 	  --min-rms FLOAT             Audible threshold for slices (default 0.02).
