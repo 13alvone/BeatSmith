@@ -22,8 +22,6 @@ def test_cli_writes_json_and_stems(tmp_path, monkeypatch):
         "4/4(1)",
         "--provider",
         "local",
-        "--num-sources",
-        "2",
         "--num-sounds",
         "1",
         "--tempo-fit",
@@ -45,3 +43,32 @@ def test_cli_writes_json_and_stems(tmp_path, monkeypatch):
         data = json.load(jf)
     assert data["stems_zip"] == zips[0].name
     assert isinstance(data.get("sources"), list) and data["sources"]
+
+
+def test_cli_warns_on_num_sources(tmp_path, monkeypatch, caplog):
+    sr = 44100
+    t = np.linspace(0, 0.5, int(sr * 0.5), endpoint=False)
+    y = np.sin(2 * np.pi * 440 * t).astype(np.float32)
+    for i in range(2):
+        sf.write(tmp_path / f"src{i}.wav", y, sr)
+
+    out_dir = tmp_path / "out"
+    argv = [
+        "bs",
+        str(out_dir),
+        "4/4(1)",
+        "--provider",
+        "local",
+        "--num-sources",
+        "2",
+        "--num-sounds",
+        "1",
+        "--tempo-fit",
+        "off",
+        "--no-boundary-refine",
+    ]
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", argv)
+    with caplog.at_level("WARNING"):
+        cli.main()
+    assert any("num-sources" in m for m in caplog.messages)

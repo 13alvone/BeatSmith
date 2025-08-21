@@ -186,7 +186,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bpm", type=float, default=120.0, help="Beats per minute (default: 120).")
     p.add_argument("--seed", type=str, default=None, help="Deterministic seed.")
     p.add_argument("--salt", type=str, default=None, help="Additional salt for alternate takes.")
-    p.add_argument("--num-sources", type=int, default=6, help="How many sources to fetch (default: 6).")
+    # Deprecated, but keep for backward compatibility
+    p.add_argument("--num-sources", type=int, default=None, help=argparse.SUPPRESS)
     p.add_argument("--query-bias", type=str, default=None, help="Optional search bias string.")
     p.add_argument("--provider", choices=["ia", "local"], default="ia", help="Audio provider (default: ia).")
     p.add_argument("--license-allow", type=str, default="cc0,creativecommons,public domain,publicdomain,cc-by,cc-by-sa", help="Comma list of license tokens allowed.")
@@ -241,6 +242,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main():
     args = build_parser().parse_args()
+    if "--num-sources" in sys.argv:
+        lw("'--num-sources' is deprecated; it will be removed in a future release.")
     # Parse num_sounds argument which may be a single integer or range "a-b"
     ns_val: Optional[int] = None
     ns_range = (15, 30)
@@ -275,6 +278,8 @@ def main():
             cur = getattr(args, k, None)
             if args.auto or cur in (None, 0, 0.0, False, "off"):
                 setattr(args, k, v)
+    if args.num_sources is None:
+        args.num_sources = 6
     if args.num_sounds is None:
         args.num_sounds = rng.randint(*args.num_sounds_range)
     args.seed = seed
