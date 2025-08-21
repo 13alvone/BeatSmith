@@ -15,6 +15,9 @@ import librosa
 from . import li, lw
 from .providers import Provider
 
+# Global target sample rate used throughout the module
+TARGET_SR = 44100
+
 # ---------------------------- Sig map ----------------------------
 @dataclass
 class MeasureSpec:
@@ -42,6 +45,31 @@ def seconds_per_measure(bpm: float, numer: int, denom: int) -> float:
     spb = (60.0 / max(bpm, 1e-6)) * (4.0 / float(denom))
     return spb * float(numer)
 
+
+def duration_samples_map(bpm: float, sr: int = TARGET_SR) -> Dict[str, int]:
+    """Map common musical durations to sample lengths.
+
+    The mapping spans standard note lengths from ``1/16`` up to a whole note
+    and their dotted equivalents.  Durations are quantized using the provided
+    BPM and sample rate.
+    """
+
+    beat_sec = 60.0 / max(bpm, 1e-6)  # duration of a quarter note in seconds
+    unit = int(round((beat_sec / 4.0) * sr))  # sixteenth note in samples
+    multiples = {
+        "1/16": 1,
+        "1/8": 2,
+        "1/4": 4,
+        "1/2": 8,
+        "1": 16,
+    }
+    out: Dict[str, int] = {}
+    for name, mult in multiples.items():
+        base = unit * mult
+        out[name] = base
+        out[f"dotted {name}"] = base * 3 // 2
+    return out
+
 # ---------------------------- RNG ----------------------------
 def seeded_rng(seed: Optional[str], salt: Optional[str]) -> random.Random:
     import hashlib
@@ -50,9 +78,6 @@ def seeded_rng(seed: Optional[str], salt: Optional[str]) -> random.Random:
     return random.Random(int.from_bytes(h, "big"))
 
 # ---------------------------- Audio utils ----------------------------
-TARGET_SR = 44100
-
-
 def load_audio_from_bytes(
     b: bytes, sr: int = TARGET_SR, filename: Optional[str] = None
 ) -> Tuple[np.ndarray, int]:
@@ -293,6 +318,34 @@ def time_stretch_to_length(seg: np.ndarray, sr: int, target_len: int, mode: str)
         y = np.tile(y, reps)[:target_len]
     return y.astype(np.float32), stretch
 
+
+def stack_slices(length: int, placements: List[Tuple[np.ndarray, int]]) -> np.ndarray:
+    """Place ``segments`` at the specified ``start`` positions and sum them.
+
+    Parameters
+    ----------
+    length : int
+        Length of the output timeline in samples.
+    placements : List[Tuple[np.ndarray, int]]
+        Each tuple contains the audio slice and the start index where it should
+        be added.
+
+    Returns
+    -------
+    np.ndarray
+        Timeline with all slices summed; slices that would exceed ``length`` are
+        truncated.
+    """
+
+    out = np.zeros(length, dtype=np.float32)
+    for seg, start in placements:
+        if start >= length or len(seg) == 0:
+            continue
+        end = min(length, start + len(seg))
+        out[start:end] += seg[: end - start]
+    return out
+
+
 def crossfade_concat(chunks: List[np.ndarray], sr: int, fade_s: float = 0.02) -> np.ndarray:
     if not chunks:
         return np.zeros(1, dtype=np.float32)
@@ -532,6 +585,7 @@ def assemble_track(
     microfill: bool,
     beat_align: bool,
     refine_boundaries: bool = True,
+    num_sounds: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Generate percussion and texture mixes from source material.
 
@@ -580,61 +634,89 @@ def assemble_track(
 
     Algorithm
     ---------
-    1. For each measure, choose one percussion and one texture source.
-    2. Extract a window aligned to onsets or beats (depending on
-       ``beat_align``) and stretch it to the measure's duration based on
-       ``tempo_mode``.
-    3. Optionally apply a microfill to texture segments.
-    4. Record metadata in ``conn`` and optionally write individual stems.
-    5. Crossfade-concatenate the percussion and texture segments to obtain the
-       two returned mixes.
+    1. For each measure, generate ``num_sounds`` short slices with quantized
+       durations.
+    2. Place each slice on a quantized timeline for its measure and stack all
+       slices per bus.
+    3. Record metadata in ``conn`` and optionally write individual stems.
+    4. Crossfade-concatenate the per-measure grooves to obtain the two returned
+       mixes.
     """
     pick_fn = pick_beat_aligned_window if beat_align else pick_onset_aligned_window
+    num_sounds = num_sounds or rng.randint(15, 30)
+    slices_per_measure = max(1, num_sounds // max(len(measures), 1))
+    dur_map = duration_samples_map(bpm)
+    quant = dur_map["1/16"]
     perc_chunks, tex_chunks = [], []
     for idx, (numer, denom) in enumerate(measures):
         dur = seconds_per_measure(bpm, numer, denom)
         target_len = int(dur * TARGET_SR)
-        src_p = choose_by_bus(sources, "perc", rng)
-        s0, s1, e_p = pick_fn(src_p.y, src_p.sr, dur, rng=rng, min_rms=min_rms, refine_edges=refine_boundaries)
-        seg_p = src_p.y[s0:s1]
-        seg_p, factor_p = time_stretch_to_length(seg_p, src_p.sr, target_len, tempo_mode)
-        perc_chunks.append(seg_p.astype(np.float32))
-        conn.execute(
-            "INSERT INTO segments(run_id,measure_index,numer,denom,bus,start_s,dur_s,source_id,energy,tempo_factor) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (run_id, idx, numer, denom, "perc", float(s0/src_p.sr), float(dur), src_p.id, float(e_p), float(factor_p))
-        )
-        src_t = choose_by_bus(sources, "tex", rng)
-        s0t, s1t, e_t = pick_fn(src_t.y, src_t.sr, dur, rng=rng, min_rms=min_rms * 0.5, refine_edges=refine_boundaries)
-        seg_t = src_t.y[s0t:s1t]
-        seg_t, factor_t = time_stretch_to_length(seg_t, src_t.sr, target_len, tempo_mode)
-        if microfill and rng.random() < 0.25:
-            fill_len = max(int(0.2 * TARGET_SR), 1)
-            s0f = max(0, s1t - fill_len - 1)
-            fill = src_t.y[s0f:s0f+fill_len]
-            if len(fill) < fill_len:
-                fill = np.pad(fill, (0, fill_len - len(fill)))
-            seg_t[-fill_len:] = 0.6*seg_t[-fill_len:] + 0.4*fill
-        tex_chunks.append(seg_t.astype(np.float32))
-        conn.execute(
-            "INSERT INTO segments(run_id,measure_index,numer,denom,bus,start_s,dur_s,source_id,energy,tempo_factor) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (run_id, idx, numer, denom, "tex", float(s0t/src_t.sr), float(dur), src_t.id, float(e_t), float(factor_t))
-        )
+        perc_slices: List[Tuple[np.ndarray, int]] = []
+        tex_slices: List[Tuple[np.ndarray, int]] = []
+        for _ in range(slices_per_measure):
+            bus = rng.choice(["perc", "tex"])
+            src = choose_by_bus(sources, bus, rng)
+            dur_name, dur_samples = rng.choice(list(dur_map.items()))
+            dur_samples = min(dur_samples, target_len)
+            start = rng.randrange(0, max(1, target_len - dur_samples + quant), quant)
+            dur_s = dur_samples / TARGET_SR
+            s0, s1, energy = pick_fn(
+                src.y,
+                src.sr,
+                dur_s,
+                rng=rng,
+                min_rms=min_rms if bus == "perc" else min_rms * 0.5,
+                refine_edges=refine_boundaries,
+            )
+            seg = src.y[s0:s1]
+            seg, factor = time_stretch_to_length(seg, src.sr, dur_samples, tempo_mode)
+            if bus == "tex" and microfill and rng.random() < 0.25:
+                fill_len = max(int(0.2 * TARGET_SR), 1)
+                s0f = max(0, s1 - fill_len - 1)
+                fill = src.y[s0f : s0f + fill_len]
+                if len(fill) < fill_len:
+                    fill = np.pad(fill, (0, fill_len - len(fill)))
+                seg[-fill_len:] = 0.6 * seg[-fill_len:] + 0.4 * fill
+            placement = (seg.astype(np.float32), start)
+            if bus == "perc":
+                perc_slices.append(placement)
+            else:
+                tex_slices.append(placement)
+            conn.execute(
+                "INSERT INTO segments(run_id,measure_index,numer,denom,bus,start_s,dur_s,source_id,energy,tempo_factor) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    idx,
+                    numer,
+                    denom,
+                    bus,
+                    float(s0 / src.sr),
+                    float(dur_s),
+                    src.id,
+                    float(energy),
+                    float(factor),
+                ),
+            )
+        groove_p = stack_slices(target_len, perc_slices)
+        groove_t = stack_slices(target_len, tex_slices)
+        perc_chunks.append(groove_p)
+        tex_chunks.append(groove_t)
         if stems_dirs:
             if stems_dirs.get("perc"):
                 sf.write(
                     os.path.join(stems_dirs["perc"], f"perc_{idx:03d}_{numer}-{denom}.wav"),
-                    safe_audio(seg_p),
+                    safe_audio(groove_p),
                     TARGET_SR,
                     subtype="PCM_16",
                 )
             if stems_dirs.get("tex"):
                 sf.write(
                     os.path.join(stems_dirs["tex"], f"tex_{idx:03d}_{numer}-{denom}.wav"),
-                    safe_audio(seg_t),
+                    safe_audio(groove_t),
                     TARGET_SR,
                     subtype="PCM_16",
                 )
     conn.commit()
     mix_perc = crossfade_concat(perc_chunks, TARGET_SR, fade_s=crossfade_s)
-    mix_tex  = crossfade_concat(tex_chunks, TARGET_SR, fade_s=crossfade_s*0.8)
+    mix_tex = crossfade_concat(tex_chunks, TARGET_SR, fade_s=crossfade_s * 0.8)
     return mix_perc, mix_tex
