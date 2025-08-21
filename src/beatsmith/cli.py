@@ -8,7 +8,7 @@ import math
 import uuid
 import zipfile
 import shutil
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Set
 
 import numpy as np
 import soundfile as sf
@@ -24,6 +24,23 @@ from .fx import (
 )
 from .providers.internet_archive import InternetArchiveProvider
 from .providers.local import LocalProvider
+
+USED_SOURCES_REGISTRY = os.path.expanduser("~/.beatsmith/used_sources.json")
+
+def load_used_sources() -> Set[str]:
+    try:
+        with open(USED_SOURCES_REGISTRY, "r") as fh:
+            data = json.load(fh)
+            if isinstance(data, list):
+                return set(str(x) for x in data)
+    except Exception:
+        pass
+    return set()
+
+def save_used_sources(entries: Set[str]) -> None:
+    os.makedirs(os.path.dirname(USED_SOURCES_REGISTRY), exist_ok=True)
+    with open(USED_SOURCES_REGISTRY, "w") as fh:
+        json.dump(sorted(entries), fh)
 
 # ---------------------------- Presets ----------------------------
 def apply_preset(args: argparse.Namespace):
@@ -174,6 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--provider", choices=["ia", "local"], default="ia", help="Audio provider (default: ia).")
     p.add_argument("--license-allow", type=str, default="cc0,creativecommons,public domain,publicdomain,cc-by,cc-by-sa", help="Comma list of license tokens allowed.")
     p.add_argument("--strict-license", action="store_true", help="Enforce license allow-list strictly (no fallback).")
+    p.add_argument("--reuse-sources", action="store_true", help="Allow reusing sources from previous runs.")
     p.add_argument("--cache-dir", type=str, default=os.path.expanduser("~/.beatsmith/cache"), help="Download cache directory.")
     p.add_argument("--min-rms", type=float, default=0.02, help="Minimum RMS for audible slice.")
     p.add_argument(
@@ -317,6 +335,8 @@ def main():
     allow_tokens = [t.strip() for t in (args.license_allow or "").split(",") if t.strip()]
     strict = bool(args.strict_license)
     li("Selecting sources...")
+    existing_used = load_used_sources()
+    used_for_pick = set() if args.reuse_sources else existing_used.copy()
     sources = pick_sources(
         None,
         None,
@@ -327,10 +347,14 @@ def main():
         allow_tokens=allow_tokens,
         strict=strict,
         cache_dir=args.cache_dir,
+        used_registry=used_for_pick,
     )
     if not sources:
         le("No sources available, aborting.")
         sys.exit(2)
+    tokens = {s.url or s.ia_identifier for s in sources if s.url or s.ia_identifier}
+    existing_used.update(tokens)
+    save_used_sources(existing_used)
     measures = build_measures(args.sig_map)
     total_sec = sum(seconds_per_measure(args.bpm, n, d) for n, d in measures)
     li(f"Total measures: {len(measures)}  est length ≈ {total_sec:.1f}s")

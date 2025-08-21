@@ -5,7 +5,7 @@ import random
 import sqlite3
 import time
 from dataclasses import dataclass
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Set
 from urllib.parse import urlparse
 
 import numpy as np
@@ -392,6 +392,7 @@ def pick_sources(
     strict: bool,
     cache_dir: str,
     pause_s: float = 0.6,
+    used_registry: Optional[Set[str]] = None,
 ) -> List[SourceRef]:
     files = provider.search(rng, wanted, query_bias, allow_tokens, strict)
     if not files:
@@ -402,6 +403,9 @@ def pick_sources(
     for f in files:
         if len(picked) >= wanted:
             break
+        token = f.get("url") or f.get("identifier")
+        if used_registry and token in used_registry:
+            continue
         url = f.get("url")
         b = provider.fetch(f, cache_dir)
         if not url or not b or len(b) < 2048:
