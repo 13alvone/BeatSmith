@@ -382,8 +382,8 @@ class SourceRef:
 
 
 def pick_sources(
-    conn: sqlite3.Connection,
-    run_id: int,
+    conn: Optional[sqlite3.Connection],
+    run_id: Optional[int],
     rng: random.Random,
     provider: Provider,
     wanted: int,
@@ -413,24 +413,28 @@ def pick_sources(
             y, sr = load_audio_from_bytes(b, sr=TARGET_SR, filename=fname)
             metrics = classify_source(y, sr)
             bus = bus_of_source(metrics)
-            cur = conn.execute(
-                "INSERT INTO sources(run_id,ia_identifier,ia_file,url,title,licenseurl,picked,bus,duration_s,zcr,flatness,onset_density) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    run_id,
-                    f.get("identifier"),
-                    f.get("name"),
-                    url,
-                    f.get("title"),
-                    provider.license(f),
-                    1,
-                    bus,
-                    float(len(y) / sr),
-                    float(metrics["zcr"]),
-                    float(metrics["flatness"]),
-                    float(metrics["onset_density"]),
-                ),
-            )
-            sid = cur.lastrowid
+            sid: int
+            if conn is not None:
+                cur = conn.execute(
+                    "INSERT INTO sources(run_id,ia_identifier,ia_file,url,title,licenseurl,picked,bus,duration_s,zcr,flatness,onset_density) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        run_id,
+                        f.get("identifier"),
+                        f.get("name"),
+                        url,
+                        f.get("title"),
+                        provider.license(f),
+                        1,
+                        bus,
+                        float(len(y) / sr),
+                        float(metrics["zcr"]),
+                        float(metrics["flatness"]),
+                        float(metrics["onset_density"]),
+                    ),
+                )
+                sid = cur.lastrowid
+            else:
+                sid = len(picked) + 1
             picked.append(
                 SourceRef(
                     sid,
@@ -458,24 +462,27 @@ def pick_sources(
         li("Synthesizing emergency noise and click sources.")
         t = np.arange(TARGET_SR * 8) / TARGET_SR
         clicks = (np.sin(2 * np.pi * 1000 * t) * (t % 0.5 < 0.01)).astype(np.float32) * 0.2
-        cur = conn.execute(
-            "INSERT INTO sources(run_id,ia_identifier,ia_file,url,title,licenseurl,picked,bus,duration_s,zcr,flatness,onset_density) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                run_id,
-                None,
-                None,
-                "synth://clicks",
-                "synthetic clicks",
-                "publicdomain",
-                1,
-                "perc",
-                float(len(clicks) / TARGET_SR),
-                0.1,
-                0.4,
-                3.0,
-            ),
-        )
-        sid1 = cur.lastrowid
+        if conn is not None:
+            cur = conn.execute(
+                "INSERT INTO sources(run_id,ia_identifier,ia_file,url,title,licenseurl,picked,bus,duration_s,zcr,flatness,onset_density) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    None,
+                    None,
+                    "synth://clicks",
+                    "synthetic clicks",
+                    "publicdomain",
+                    1,
+                    "perc",
+                    float(len(clicks) / TARGET_SR),
+                    0.1,
+                    0.4,
+                    3.0,
+                ),
+            )
+            sid1 = cur.lastrowid
+        else:
+            sid1 = len(picked) + 1
         picked.append(
             SourceRef(
                 sid1,
@@ -496,24 +503,27 @@ def pick_sources(
             .astype(np.float32)
             * 0.03
         )
-        cur = conn.execute(
-            "INSERT INTO sources(run_id,ia_identifier,ia_file,url,title,licenseurl,picked,bus,duration_s,zcr,flatness,onset_density) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                run_id,
-                None,
-                None,
-                "synth://noise",
-                "synthetic noise",
-                "publicdomain",
-                1,
-                "tex",
-                float(len(noise) / TARGET_SR),
-                0.05,
-                0.9,
-                0.2,
-            ),
-        )
-        sid2 = cur.lastrowid
+        if conn is not None:
+            cur = conn.execute(
+                "INSERT INTO sources(run_id,ia_identifier,ia_file,url,title,licenseurl,picked,bus,duration_s,zcr,flatness,onset_density) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    None,
+                    None,
+                    "synth://noise",
+                    "synthetic noise",
+                    "publicdomain",
+                    1,
+                    "tex",
+                    float(len(noise) / TARGET_SR),
+                    0.05,
+                    0.9,
+                    0.2,
+                ),
+            )
+            sid2 = cur.lastrowid
+        else:
+            sid2 = len(picked) + 1
         picked.append(
             SourceRef(
                 sid2,
@@ -572,8 +582,8 @@ def build_measures(sig_specs: List[MeasureSpec]) -> List[Tuple[int,int]]:
     return out
 
 def assemble_track(
-    conn: sqlite3.Connection,
-    run_id: int,
+    conn: Optional[sqlite3.Connection],
+    run_id: Optional[int],
     sources: List[SourceRef],
     measures: List[Tuple[int, int]],
     bpm: float,
@@ -591,9 +601,10 @@ def assemble_track(
 
     Parameters
     ----------
-    conn : sqlite3.Connection
-        Database handle used to log each generated segment.
-    run_id : int
+    conn : sqlite3.Connection, optional
+        Database handle used to log each generated segment.  When ``None``,
+        no database logging is performed.
+    run_id : int, optional
         Identifier for the current generation run.
     sources : List[SourceRef]
         Pool of candidate sources with pre-loaded audio data.
@@ -686,21 +697,22 @@ def assemble_track(
                 perc_slices.append(placement)
             else:
                 tex_slices.append(placement)
-            conn.execute(
-                "INSERT INTO segments(run_id,measure_index,numer,denom,bus,start_s,dur_s,source_id,energy,tempo_factor) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (
-                    run_id,
-                    idx,
-                    numer,
-                    denom,
-                    bus,
-                    float(s0 / src.sr),
-                    float(dur_s),
-                    src.id,
-                    float(energy),
-                    float(factor),
-                ),
-            )
+            if conn is not None:
+                conn.execute(
+                    "INSERT INTO segments(run_id,measure_index,numer,denom,bus,start_s,dur_s,source_id,energy,tempo_factor) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        run_id,
+                        idx,
+                        numer,
+                        denom,
+                        bus,
+                        float(s0 / src.sr),
+                        float(dur_s),
+                        src.id,
+                        float(energy),
+                        float(factor),
+                    ),
+                )
         groove_p = stack_slices(target_len, perc_slices)
         groove_t = stack_slices(target_len, tex_slices)
         perc_chunks.append(groove_p)
@@ -720,7 +732,8 @@ def assemble_track(
                     TARGET_SR,
                     subtype="PCM_16",
                 )
-    conn.commit()
+    if conn is not None:
+        conn.commit()
     mix_perc = crossfade_concat(perc_chunks, TARGET_SR, fade_s=crossfade_s)
     mix_tex = crossfade_concat(tex_chunks, TARGET_SR, fade_s=crossfade_s * 0.8)
     return mix_perc, mix_tex

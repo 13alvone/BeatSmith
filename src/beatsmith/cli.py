@@ -5,13 +5,15 @@ import os
 import sys
 import time
 import math
+import uuid
+import zipfile
+import shutil
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import soundfile as sf
 
 from . import li, lw, le, log
-from .db import db_open
 from .audio import (
     parse_sig_map, seconds_per_measure, seeded_rng, normalize_peak,
     load_audio_file, pick_sources, build_measures, assemble_track, TARGET_SR,
@@ -285,26 +287,19 @@ def main():
         return
     out_dir = os.path.abspath(args.out_dir)
     os.makedirs(out_dir, exist_ok=True)
-    stems_dirs = {}
-    if args.stems:
-        stems_root = os.path.join(out_dir, "stems")
-        os.makedirs(stems_root, exist_ok=True)
-        perc_dir = os.path.join(stems_root, "perc")
-        tex_dir  = os.path.join(stems_root, "tex")
-        os.makedirs(perc_dir, exist_ok=True)
-        os.makedirs(tex_dir, exist_ok=True)
-        stems_dirs = {"perc": perc_dir, "tex": tex_dir}
-    db_path = os.path.join(out_dir, "beatsmith_v3.db")
-    conn = db_open(db_path)
-    params = vars(args).copy()
-    params["sig_map"] = None
+    # Unique base name for all outputs
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    base = f"bs_{ts}_{uuid.uuid4().hex[:8]}"
+    stems_root = os.path.join(out_dir, base + "_stems")
+    perc_dir = os.path.join(stems_root, "perc")
+    tex_dir = os.path.join(stems_root, "tex")
+    os.makedirs(perc_dir, exist_ok=True)
+    os.makedirs(tex_dir, exist_ok=True)
+    stems_dirs = {"perc": perc_dir, "tex": tex_dir}
     sig_str = ",".join(f"{ms.numer}/{ms.denom}({ms.count})" for ms in args.sig_map)
-    row = conn.execute(
-        "INSERT INTO runs(created_at,out_dir,bpm,sig_map,seed,salt,params_json) VALUES (datetime('now'),?,?,?,?,?,?)",
-        (out_dir, float(args.bpm), sig_str, seed, args.salt or "", json.dumps(params, ensure_ascii=False))
+    li(
+        f"Run preset={args.preset or 'none'} BPM={args.bpm} sig_map={sig_str} seed='{seed}' salt='{args.salt or ''}'"
     )
-    run_id = row.lastrowid
-    li(f"Run id={run_id} preset={args.preset or 'none'} BPM={args.bpm} sig_map={sig_str} seed='{seed}' salt='{args.salt or ''}'")
     fx_bits = []
     if args.compress: fx_bits.append("compressor")
     if any(abs(x) > 1e-6 for x in [args.eq_low, args.eq_mid, args.eq_high]):
@@ -323,8 +318,8 @@ def main():
     strict = bool(args.strict_license)
     li("Selecting sources...")
     sources = pick_sources(
-        conn,
-        run_id,
+        None,
+        None,
         rng,
         provider,
         wanted=max(2, args.num_sources),
@@ -342,8 +337,8 @@ def main():
     align_name = "beat" if args.beat_align else "onset"
     li(f"Assembling {align_name}-aligned measures (perc + tex buses)...")
     mix_perc, mix_tex = assemble_track(
-        conn,
-        run_id,
+        None,
+        None,
         sources,
         measures,
         bpm=args.bpm,
@@ -398,18 +393,48 @@ def main():
     if len(mix) < min_len:
         li(f"Mix length {len(mix)/TARGET_SR:.1f}s < 60s; looping with varied FX")
         loops = [mix]
-        base = mix.copy()
+        loop_src = mix.copy()
         total = len(mix)
         while total < min_len:
-            loop = random_post_fx(base.copy(), rng)
+            loop = random_post_fx(loop_src.copy(), rng)
             loops.append(loop)
             total += len(loop)
         mix = np.concatenate(loops)
     mix = normalize_peak(mix, peak_db=-0.8)
     mix = safe_audio(mix)
-    out_wav = os.path.join(out_dir, f"beatsmith_v3_{run_id}.wav")
+    out_wav = os.path.join(out_dir, base + ".wav")
     sf.write(out_wav, mix, TARGET_SR, subtype="PCM_16")
+    # Archive stems
+    zip_path = os.path.join(out_dir, base + "_stems.zip")
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for root, _, files in os.walk(stems_root):
+            for fn in files:
+                full = os.path.join(root, fn)
+                arc = os.path.relpath(full, stems_root)
+                zf.write(full, arc)
+    shutil.rmtree(stems_root, ignore_errors=True)
+    metadata = {
+        "seed": seed,
+        "bpm": float(args.bpm),
+        "sig_map": sig_str,
+        "preset": args.preset,
+        "sources": [
+            {
+                "url": s.url,
+                "title": s.title,
+                "license": s.licenseurl,
+                "bus": s.bus,
+            }
+            for s in sources
+        ],
+        "stems_zip": os.path.basename(zip_path),
+        "mix_wav": os.path.basename(out_wav),
+    }
+    out_json = os.path.join(out_dir, base + ".json")
+    with open(out_json, "w", encoding="utf-8") as jf:
+        json.dump(metadata, jf, ensure_ascii=False, indent=2)
     li(f"Wrote: {out_wav}")
+    li(f"Metadata: {out_json}")
     li("Done.")
 
 if __name__ == "__main__":
