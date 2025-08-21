@@ -82,6 +82,7 @@ def autopilot_config(rng) -> Dict[str, Any]:
         "preset": preset,
         "bpm": float(bpm),
         "num_sources": rng.randint(4, 8),
+        "num_sounds": rng.randint(15, 30),
         "crossfade": rng.uniform(0.01, 0.04),
         "stems": rng.random() < 0.3,
         "microfill": rng.random() < 0.5,
@@ -120,6 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--strict-license", action="store_true", help="Enforce license allow-list strictly (no fallback).")
     p.add_argument("--cache-dir", type=str, default=os.path.expanduser("~/.beatsmith/cache"), help="Download cache directory.")
     p.add_argument("--min-rms", type=float, default=0.02, help="Minimum RMS for audible slice.")
+    p.add_argument("--num-sounds", type=int, default=None, help="Number of slices to generate (default: 15-30 random).")
     p.add_argument("--crossfade", type=float, default=0.02, help="Seconds of crossfade between measures.")
     p.add_argument("--tempo-fit", choices=["off","loose","strict"], default="strict", help="Time-stretch mode to fit global measure length.")
     p.add_argument("--stems", action="store_true", help="Write stems per bus/measure.")
@@ -274,6 +276,7 @@ def main():
         microfill=args.microfill,
         beat_align=bool(args.beat_align),
         refine_boundaries=args.boundary_refine,
+        num_sounds=args.num_sounds,
     )
     tex_gain = 10 ** (-3.0 / 20.0)
     L = max(len(mix_perc), len(mix_tex))
