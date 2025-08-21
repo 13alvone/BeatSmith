@@ -26,6 +26,7 @@ from .providers.internet_archive import InternetArchiveProvider
 from .providers.local import LocalProvider
 
 USED_SOURCES_REGISTRY = os.path.expanduser("~/.beatsmith/used_sources.json")
+FX_CHANCE = 0.2  # probability gate for applying any given effect
 
 def load_used_sources() -> Set[str]:
     try:
@@ -135,51 +136,33 @@ def autopilot_config(
     return cfg
 
 
-def random_post_fx(y: np.ndarray, rng) -> np.ndarray:
-    if rng.random() < 0.5:
+def stack_fx(y: np.ndarray, args: argparse.Namespace, rng) -> np.ndarray:
+    """Apply per-groove compression/EQ with probability gating."""
+    if args.compress and rng.random() < FX_CHANCE:
+        li("Applying per-stack compressor...")
+        y = compressor(
+            y,
+            TARGET_SR,
+            thresh_db=args.comp_thresh,
+            ratio=args.comp_ratio,
+            makeup_db=args.comp_makeup,
+        )
+    if any(abs(g) > 1e-6 for g in [args.eq_low, args.eq_mid, args.eq_high]) and rng.random() < FX_CHANCE:
+        li(f"Applying per-stack EQ: low={args.eq_low} mid={args.eq_mid} high={args.eq_high}")
         y = eq_three_band(
             y,
             TARGET_SR,
-            low_db=rng.uniform(-3, 3),
-            mid_db=rng.uniform(-3, 3),
-            high_db=rng.uniform(-3, 3),
+            low_db=args.eq_low,
+            mid_db=args.eq_mid,
+            high_db=args.eq_high,
         )
-    if rng.random() < 0.5:
-        y = reverb_schroeder(
-            y,
-            TARGET_SR,
-            room_size=rng.uniform(0.2, 0.8),
-            mix=rng.uniform(0.05, 0.3),
-        )
-    if rng.random() < 0.3:
-        y = tremolo(
-            y,
-            TARGET_SR,
-            rate_hz=rng.uniform(3.0, 7.0),
-            depth=rng.uniform(0.2, 0.6),
-        )
-    if rng.random() < 0.3:
-        y = phaser(
-            y,
-            TARGET_SR,
-            rate_hz=rng.uniform(0.1, 1.0),
-            depth=rng.uniform(0.3, 0.7),
-        )
-    if rng.random() < 0.4:
-        wet = echo(
-            y.copy(),
-            TARGET_SR,
-            delay_ms=rng.uniform(200, 500),
-            feedback=rng.uniform(0.2, 0.5),
-            mix=rng.uniform(0.1, 0.4),
-        )
-        y = (0.75 * y + 0.25 * wet).astype(np.float32)
-    return normalize_peak(y, peak_db=-0.8)
+    return y
 
 # ---------------------------- CLI ----------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="BeatSmith v3: pull CC/PD audio from selected providers, onset-align slices per signature map, run percussive+texture buses, FX, and render a beat."
+        description="BeatSmith v3: pull CC/PD audio from selected providers, onset-align slices per signature map, run percussive+texture buses, FX, and render a beat.",
+        epilog="FX order: per-groove compressor/EQ then post-loop reverb/tremolo/phaser/echo (each ~20%% chance).",
     )
     p.add_argument("out_dir", nargs="?", default=None, help="Output directory (created if missing).")
     p.add_argument("sig_map", nargs="?", default=None, type=parse_sig_map, help="Signature map like '4/4(4),5/4(3),6/8(5)'.")
@@ -222,20 +205,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--build-on", type=str, default=None, help="Path to an existing base track to mix under.")
     p.add_argument("--sidechain", type=float, default=0.0, help="Sidechain duck amount 0..1 against base (default 0).")
     p.add_argument("--sidechain-lookahead-ms", type=float, default=0.0, help="Lookahead (ms) for sidechain.")
-    p.add_argument("--compress", action="store_true", help="Enable master bus compressor.")
+    p.add_argument("--compress", action="store_true", help="Per-groove compressor (~20%% chance).")
     p.add_argument("--comp-thresh", type=float, default=-18.0)
     p.add_argument("--comp-ratio", type=float, default=4.0)
     p.add_argument("--comp-makeup", type=float, default=2.0)
-    p.add_argument("--eq-low", type=float, default=0.0, help="Low shelf gain dB")
-    p.add_argument("--eq-mid", type=float, default=0.0, help="Mid band gain dB")
-    p.add_argument("--eq-high", type=float, default=0.0, help="High shelf gain dB")
-    p.add_argument("--reverb-mix", type=float, default=0.0, help="0..1 wet mix; 0 disables")
+    p.add_argument("--eq-low", type=float, default=0.0, help="Low shelf gain dB (per-groove, ~20%% chance)")
+    p.add_argument("--eq-mid", type=float, default=0.0, help="Mid band gain dB (per-groove, ~20%% chance)")
+    p.add_argument("--eq-high", type=float, default=0.0, help="High shelf gain dB (per-groove, ~20%% chance)")
+    p.add_argument("--reverb-mix", type=float, default=0.0, help="0..1 wet mix post-loop (~20%% chance)")
     p.add_argument("--reverb-room", type=float, default=0.3, help="0..1 room size-ish")
-    p.add_argument("--tremolo-rate", type=float, default=0.0, help=">0 to enable (Hz)")
+    p.add_argument("--tremolo-rate", type=float, default=0.0, help=">0 to enable post-loop (Hz, ~20%% chance)")
     p.add_argument("--tremolo-depth", type=float, default=0.5, help="0..1")
-    p.add_argument("--phaser-rate", type=float, default=0.0, help=">0 to enable (Hz)")
+    p.add_argument("--phaser-rate", type=float, default=0.0, help=">0 to enable post-loop (Hz, ~20%% chance)")
     p.add_argument("--phaser-depth", type=float, default=0.6, help="0..1")
-    p.add_argument("--echo-ms", type=float, default=0.0, help=">0 to enable (ms delay)")
+    p.add_argument("--echo-ms", type=float, default=0.0, help=">0 to enable post-loop (ms delay, ~20%% chance)")
     p.add_argument("--echo-fb", type=float, default=0.3, help="Feedback 0..1")
     p.add_argument("--echo-mix", type=float, default=0.25, help="Wet mix 0..1")
     return p
@@ -399,36 +382,31 @@ def main():
             mix = (0.5*base + 0.5*mix).astype(np.float32)
         except Exception as e:
             lw(f"Base layering failed: {e}")
-    if args.compress:
-        li("Applying master compressor...")
-        mix = compressor(mix, TARGET_SR, thresh_db=args.comp_thresh, ratio=args.comp_ratio, makeup_db=args.comp_makeup)
-    if any(abs(g)>1e-6 for g in [args.eq_low, args.eq_mid, args.eq_high]):
-        li(f"Applying master EQ: low={args.eq_low} mid={args.eq_mid} high={args.eq_high}")
-        mix = eq_three_band(mix, TARGET_SR, low_db=args.eq_low, mid_db=args.eq_mid, high_db=args.eq_high)
-    if args.reverb_mix > 0.0:
-        li(f"Applying reverb (mix={args.reverb_mix:.2f}, room={args.reverb_room:.2f})")
-        mix = reverb_schroeder(mix, TARGET_SR, room_size=args.reverb_room, mix=args.reverb_mix)
-    if args.tremolo_rate > 0.0:
-        li(f"Applying tremolo (rate={args.tremolo_rate}Hz, depth={args.tremolo_depth})")
-        mix = tremolo(mix, TARGET_SR, rate_hz=args.tremolo_rate, depth=args.tremolo_depth)
-    if args.phaser_rate > 0.0:
-        li(f"Applying phaser (rate={args.phaser_rate}Hz, depth={args.phaser_depth})")
-        mix = phaser(mix, TARGET_SR, rate_hz=args.phaser_rate, depth=args.phaser_depth)
-    if args.echo_ms > 0.0:
-        li(f"Applying echo (delay={args.echo_ms}ms, fb={args.echo_fb}, mix={args.echo_mix})")
-        wet = echo(mix.copy(), TARGET_SR, delay_ms=args.echo_ms, feedback=args.echo_fb, mix=args.echo_mix)
-        mix = (0.75*mix + 0.25*wet).astype(np.float32)
+    loop_src = mix.copy()
+    mix = stack_fx(loop_src.copy(), args, rng)
     min_len = int(60.0 * TARGET_SR)
     if len(mix) < min_len:
-        li(f"Mix length {len(mix)/TARGET_SR:.1f}s < 60s; looping with varied FX")
+        li(f"Mix length {len(mix)/TARGET_SR:.1f}s < 60s; looping with per-stack FX")
         loops = [mix]
-        loop_src = mix.copy()
         total = len(mix)
         while total < min_len:
-            loop = random_post_fx(loop_src.copy(), rng)
+            loop = stack_fx(loop_src.copy(), args, rng)
             loops.append(loop)
             total += len(loop)
         mix = np.concatenate(loops)
+    if args.reverb_mix > 0.0 and rng.random() < FX_CHANCE:
+        li(f"Applying reverb (mix={args.reverb_mix:.2f}, room={args.reverb_room:.2f})")
+        mix = reverb_schroeder(mix, TARGET_SR, room_size=args.reverb_room, mix=args.reverb_mix)
+    if args.tremolo_rate > 0.0 and rng.random() < FX_CHANCE:
+        li(f"Applying tremolo (rate={args.tremolo_rate}Hz, depth={args.tremolo_depth})")
+        mix = tremolo(mix, TARGET_SR, rate_hz=args.tremolo_rate, depth=args.tremolo_depth)
+    if args.phaser_rate > 0.0 and rng.random() < FX_CHANCE:
+        li(f"Applying phaser (rate={args.phaser_rate}Hz, depth={args.phaser_depth})")
+        mix = phaser(mix, TARGET_SR, rate_hz=args.phaser_rate, depth=args.phaser_depth)
+    if args.echo_ms > 0.0 and rng.random() < FX_CHANCE:
+        li(f"Applying echo (delay={args.echo_ms}ms, fb={args.echo_fb}, mix={args.echo_mix})")
+        wet = echo(mix.copy(), TARGET_SR, delay_ms=args.echo_ms, feedback=args.echo_fb, mix=args.echo_mix)
+        mix = (0.75*mix + 0.25*wet).astype(np.float32)
     mix = normalize_peak(mix, peak_db=-0.8)
     mix = safe_audio(mix)
     out_wav = os.path.join(out_dir, base + ".wav")

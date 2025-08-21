@@ -9,7 +9,7 @@ Deterministic, Internet Archive–powered beat builder that slices audible, onse
 - License hygiene: prefer/allowlist CC/PD sources from Internet Archive
 - Time-stretch to fit measure length: `--tempo-fit off|loose|strict`
 - Built-on layering: mix on top of your own track, optional lookahead sidechain
-- FX chain: compressor, 3-band EQ, reverb, tremolo, phaser, echo
+- FX chain: per-groove compressor+3-band EQ, then post-loop reverb/tremolo/phaser/echo (each ~20% chance)
 - SQLite logging of runs, sources, and per-measure segments for full provenance
 - Caching of downloads (`~/.beatsmith/cache` by default)
 - Stems per bus/measure (optional)
@@ -136,15 +136,15 @@ Presets bias EQ, FX, and query terms sensibly. You can still override any knob.
 	  --sidechain FLOAT           Duck new beat against base (0..1).
 	  --sidechain-lookahead-ms FLOAT  Lookahead for sidechain envelope.
 
-	FX (master bus):
-	  --compress                  Enable compressor
-	  --comp-thresh FLOAT         Threshold dB (default -18)
-	  --comp-ratio  FLOAT         Ratio (default 4)
-	  --comp-makeup FLOAT         Makeup gain dB (default +2)
-	  --eq-low/--eq-mid/--eq-high FLOAT  3-band EQ gains (dB)
-	  --reverb-mix FLOAT          0..1 (0 disables)
+        FX (per-groove then post-loop, ~20% chance each):
+          --compress                  Per-groove compressor
+          --comp-thresh FLOAT         Threshold dB (default -18)
+          --comp-ratio  FLOAT         Ratio (default 4)
+          --comp-makeup FLOAT         Makeup gain dB (default +2)
+          --eq-low/--eq-mid/--eq-high FLOAT  Per-groove 3-band EQ gains (dB)
+          --reverb-mix FLOAT          Post-loop 0..1 wet mix
           --reverb-room FLOAT         0..1
-          --tremolo-rate FLOAT        Hz (0 disables)
+          --tremolo-rate FLOAT        Post-loop Hz
           --tremolo-depth FLOAT       0..1
           --force-reverb              Autopilot: always include reverb
           --force-tremolo             Autopilot: always include tremolo
@@ -168,7 +168,7 @@ Presets bias EQ, FX, and query terms sensibly. You can still override any knob.
 	   - Time-stretch to measure duration (off/loose/strict).
 	   - (Optional) micro-fill at tail for texture.
 	5) Crossfade-concat measures per bus, balance buses, optional base mix & sidechain.
-	6) Master FX (compressor → EQ → reverb → optional tremolo/phaser/echo), normalize, write WAV.
+        6) FX: per-groove compressor → EQ (each gated ~20%), loop to length, then one pass of optional reverb/tremolo/phaser/echo (each ~20% chance); normalize, write WAV.
 	7) Log everything to SQLite: runs, sources, per-measure segments & parameters.
 
 ---
