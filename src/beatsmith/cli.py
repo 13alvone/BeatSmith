@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import time
+import math
 from typing import Any, Dict
 
 import numpy as np
@@ -57,13 +58,15 @@ def apply_preset(args: argparse.Namespace):
 
 # ---------------------------- Autopilot ----------------------------
 def autopilot_config(rng) -> Dict[str, Any]:
-    sig_opts = [
+    long_sig_opts = ["4/4(16)", "3/4(16)", "7/8(16)", "5/4(16)"]
+    short_sig_opts = [
         "4/4(8)",
         "4/4(4),5/4(3),6/8(5)",
         "3/4(8)",
         "7/8(8)",
         "5/4(8)",
     ]
+    sig_opts = long_sig_opts * 2 + short_sig_opts
     sig_str = rng.choice(sig_opts)
     preset = rng.choice(["boom-bap", "edm", "lofi"])
     if preset == "boom-bap":
@@ -72,13 +75,19 @@ def autopilot_config(rng) -> Dict[str, Any]:
         bpm = rng.uniform(120, 136)
     else:
         bpm = rng.uniform(60, 84)
+    sig_map = parse_sig_map(sig_str)
+    est_len = sum(seconds_per_measure(bpm, ms.numer, ms.denom) * ms.count for ms in sig_map)
+    if est_len < 60.0:
+        reps = int(math.ceil(60.0 / est_len))
+        for ms in sig_map:
+            ms.count *= reps
     out_dir = os.path.join(
         "beatsmith_auto",
         f"bs_{time.strftime('%Y%m%d_%H%M%S')}_{rng.randrange(10000):04d}"
     )
     cfg: Dict[str, Any] = {
         "out_dir": out_dir,
-        "sig_map": parse_sig_map(sig_str),
+        "sig_map": sig_map,
         "preset": preset,
         "bpm": float(bpm),
         "num_sources": rng.randint(4, 8),
@@ -103,6 +112,48 @@ def autopilot_config(rng) -> Dict[str, Any]:
         "echo_mix": rng.uniform(0.1, 0.4),
     }
     return cfg
+
+
+def random_post_fx(y: np.ndarray, rng) -> np.ndarray:
+    if rng.random() < 0.5:
+        y = eq_three_band(
+            y,
+            TARGET_SR,
+            low_db=rng.uniform(-3, 3),
+            mid_db=rng.uniform(-3, 3),
+            high_db=rng.uniform(-3, 3),
+        )
+    if rng.random() < 0.5:
+        y = reverb_schroeder(
+            y,
+            TARGET_SR,
+            room_size=rng.uniform(0.2, 0.8),
+            mix=rng.uniform(0.05, 0.3),
+        )
+    if rng.random() < 0.3:
+        y = tremolo(
+            y,
+            TARGET_SR,
+            rate_hz=rng.uniform(3.0, 7.0),
+            depth=rng.uniform(0.2, 0.6),
+        )
+    if rng.random() < 0.3:
+        y = phaser(
+            y,
+            TARGET_SR,
+            rate_hz=rng.uniform(0.1, 1.0),
+            depth=rng.uniform(0.3, 0.7),
+        )
+    if rng.random() < 0.4:
+        wet = echo(
+            y.copy(),
+            TARGET_SR,
+            delay_ms=rng.uniform(200, 500),
+            feedback=rng.uniform(0.2, 0.5),
+            mix=rng.uniform(0.1, 0.4),
+        )
+        y = (0.75 * y + 0.25 * wet).astype(np.float32)
+    return normalize_peak(y, peak_db=-0.8)
 
 # ---------------------------- CLI ----------------------------
 def build_parser() -> argparse.ArgumentParser:
@@ -315,6 +366,17 @@ def main():
         li(f"Applying echo (delay={args.echo_ms}ms, fb={args.echo_fb}, mix={args.echo_mix})")
         wet = echo(mix.copy(), TARGET_SR, delay_ms=args.echo_ms, feedback=args.echo_fb, mix=args.echo_mix)
         mix = (0.75*mix + 0.25*wet).astype(np.float32)
+    min_len = int(60.0 * TARGET_SR)
+    if len(mix) < min_len:
+        li(f"Mix length {len(mix)/TARGET_SR:.1f}s < 60s; looping with varied FX")
+        loops = [mix]
+        base = mix.copy()
+        total = len(mix)
+        while total < min_len:
+            loop = random_post_fx(base.copy(), rng)
+            loops.append(loop)
+            total += len(loop)
+        mix = np.concatenate(loops)
     mix = normalize_peak(mix, peak_db=-0.8)
     mix = safe_audio(mix)
     out_wav = os.path.join(out_dir, f"beatsmith_v3_{run_id}.wav")
