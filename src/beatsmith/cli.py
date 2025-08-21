@@ -34,14 +34,12 @@ def apply_preset(args: argparse.Namespace):
         if args.eq_mid == 0.0: args.eq_mid = -1.0
         if args.eq_high == 0.0: args.eq_high = +1.0
         if not args.compress: args.compress = True
-        if args.reverb_mix == 0.0: args.reverb_mix = 0.08
         if args.query_bias is None: args.query_bias = "drums OR percussion OR vinyl OR breakbeat"
     elif pres == "edm":
         if args.eq_low == 0.0: args.eq_low = +4.0
         if args.eq_mid == 0.0: args.eq_mid = -2.0
         if args.eq_high == 0.0: args.eq_high = +2.0
         if not args.compress: args.compress = True
-        if args.reverb_mix == 0.0: args.reverb_mix = 0.15
         if args.echo_ms == 0.0: args.echo_ms = 300.0
         if args.echo_mix == 0.0: args.echo_mix = 0.2
         if args.query_bias is None: args.query_bias = "electronic OR drum machine OR loop"
@@ -49,15 +47,17 @@ def apply_preset(args: argparse.Namespace):
         if args.eq_low == 0.0: args.eq_low = +2.0
         if args.eq_mid == 0.0: args.eq_mid = +1.5
         if args.eq_high == 0.0: args.eq_high = -2.0
-        if args.tremolo_rate == 0.0: args.tremolo_rate = 4.0
-        if args.tremolo_depth == 0.0: args.tremolo_depth = 0.25
-        if args.reverb_mix == 0.0: args.reverb_mix = 0.12
         if args.query_bias is None: args.query_bias = "jazz OR vinyl OR mellow OR ambient"
     else:
         lw(f"Unknown preset '{args.preset}', ignoring.")
 
 # ---------------------------- Autopilot ----------------------------
-def autopilot_config(rng, num_sounds_range: Tuple[int, int] = (15, 30)) -> Dict[str, Any]:
+def autopilot_config(
+    rng,
+    num_sounds_range: Tuple[int, int] = (15, 30),
+    force_reverb: bool = False,
+    force_tremolo: bool = False,
+) -> Dict[str, Any]:
     long_sig_opts = ["4/4(16)", "3/4(16)", "7/8(16)", "5/4(16)"]
     short_sig_opts = [
         "4/4(8)",
@@ -85,6 +85,8 @@ def autopilot_config(rng, num_sounds_range: Tuple[int, int] = (15, 30)) -> Dict[
         "beatsmith_auto",
         f"bs_{time.strftime('%Y%m%d_%H%M%S')}_{rng.randrange(10000):04d}"
     )
+    reverb_on = force_reverb or rng.random() < 0.1
+    tremolo_on = force_tremolo or rng.random() < 0.1
     cfg: Dict[str, Any] = {
         "out_dir": out_dir,
         "sig_map": sig_map,
@@ -101,10 +103,10 @@ def autopilot_config(rng, num_sounds_range: Tuple[int, int] = (15, 30)) -> Dict[
         "eq_low": rng.uniform(-3, 3),
         "eq_mid": rng.uniform(-3, 3),
         "eq_high": rng.uniform(-3, 3),
-        "reverb_mix": rng.uniform(0.05, 0.25) if rng.random() < 0.7 else 0.0,
-        "reverb_room": rng.uniform(0.2, 0.6),
-        "tremolo_rate": rng.uniform(3.0, 7.0) if rng.random() < 0.3 else 0.0,
-        "tremolo_depth": rng.uniform(0.2, 0.6),
+        "reverb_mix": rng.uniform(0.05, 0.25) if reverb_on else 0.0,
+        "reverb_room": rng.uniform(0.2, 0.6) if reverb_on else 0.0,
+        "tremolo_rate": rng.uniform(3.0, 7.0) if tremolo_on else 0.0,
+        "tremolo_depth": rng.uniform(0.2, 0.6) if tremolo_on else 0.0,
         "phaser_rate": rng.uniform(0.1, 1.0) if rng.random() < 0.2 else 0.0,
         "phaser_depth": rng.uniform(0.3, 0.7),
         "echo_ms": rng.uniform(200, 500) if rng.random() < 0.4 else 0.0,
@@ -192,6 +194,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(boundary_refine=True)
     p.add_argument("--preset", type=str, default=None, help="Preset: boom-bap | edm | lofi")
     p.add_argument("--auto", action="store_true", help="Autopilot mode: randomize signature map, BPM, preset, sources, FX.")
+    p.add_argument("--force-reverb", action="store_true", help="Autopilot: always include reverb")
+    p.add_argument("--force-tremolo", action="store_true", help="Autopilot: always include tremolo")
     p.add_argument("--dry-run", action="store_true", help="Print planned sources and measures without downloading audio.")
     p.add_argument("--verbose", action="store_true", help="Enable debug logs.")
     p.add_argument("--build-on", type=str, default=None, help="Path to an existing base track to mix under.")
@@ -235,7 +239,12 @@ def main():
     seed = args.seed or f"auto-{time.time_ns()}"
     rng = seeded_rng(seed, args.salt)
     if args.auto or args.out_dir is None or args.sig_map is None:
-        auto = autopilot_config(rng, num_sounds_range=args.num_sounds_range)
+        auto = autopilot_config(
+            rng,
+            num_sounds_range=args.num_sounds_range,
+            force_reverb=args.force_reverb,
+            force_tremolo=args.force_tremolo,
+        )
         if args.auto or args.out_dir is None:
             args.out_dir = auto["out_dir"]
         if args.auto or args.sig_map is None:

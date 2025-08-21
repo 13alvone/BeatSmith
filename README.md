@@ -142,12 +142,14 @@ Presets bias EQ, FX, and query terms sensibly. You can still override any knob.
 	  --comp-makeup FLOAT         Makeup gain dB (default +2)
 	  --eq-low/--eq-mid/--eq-high FLOAT  3-band EQ gains (dB)
 	  --reverb-mix FLOAT          0..1 (0 disables)
-	  --reverb-room FLOAT         0..1
-	  --tremolo-rate FLOAT        Hz (0 disables)
-	  --tremolo-depth FLOAT       0..1
-	  --phaser-rate FLOAT         Hz (0 disables)
-	  --phaser-depth FLOAT        0..1
-	  --echo-ms FLOAT             ms (0 disables)
+          --reverb-room FLOAT         0..1
+          --tremolo-rate FLOAT        Hz (0 disables)
+          --tremolo-depth FLOAT       0..1
+          --force-reverb              Autopilot: always include reverb
+          --force-tremolo             Autopilot: always include tremolo
+          --phaser-rate FLOAT         Hz (0 disables)
+          --phaser-depth FLOAT        0..1
+          --echo-ms FLOAT             ms (0 disables)
 	  --echo-fb FLOAT             0..1 feedback
 	  --echo-mix FLOAT            0..1 wet mix
 
