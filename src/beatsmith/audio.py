@@ -634,8 +634,7 @@ def assemble_track(
 
     Algorithm
     ---------
-    1. For each measure, generate ``num_sounds`` short slices with quantized
-       durations.
+    1. Distribute ``num_sounds`` quantized slices across all measures.
     2. Place each slice on a quantized timeline for its measure and stack all
        slices per bus.
     3. Record metadata in ``conn`` and optionally write individual stems.
@@ -644,7 +643,12 @@ def assemble_track(
     """
     pick_fn = pick_beat_aligned_window if beat_align else pick_onset_aligned_window
     num_sounds = num_sounds or rng.randint(15, 30)
-    slices_per_measure = max(1, num_sounds // max(len(measures), 1))
+    m = max(len(measures), 1)
+    base, rem = divmod(num_sounds, m)
+    per_measure = [base] * m
+    if rem:
+        for i in rng.sample(range(m), rem):
+            per_measure[i] += 1
     dur_map = duration_samples_map(bpm)
     quant = dur_map["1/16"]
     perc_chunks, tex_chunks = [], []
@@ -653,7 +657,7 @@ def assemble_track(
         target_len = int(dur * TARGET_SR)
         perc_slices: List[Tuple[np.ndarray, int]] = []
         tex_slices: List[Tuple[np.ndarray, int]] = []
-        for _ in range(slices_per_measure):
+        for _ in range(per_measure[idx]):
             bus = rng.choice(["perc", "tex"])
             src = choose_by_bus(sources, bus, rng)
             dur_name, dur_samples = rng.choice(list(dur_map.items()))

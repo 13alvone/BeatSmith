@@ -5,7 +5,7 @@ import os
 import sys
 import time
 import math
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import soundfile as sf
@@ -57,7 +57,7 @@ def apply_preset(args: argparse.Namespace):
         lw(f"Unknown preset '{args.preset}', ignoring.")
 
 # ---------------------------- Autopilot ----------------------------
-def autopilot_config(rng) -> Dict[str, Any]:
+def autopilot_config(rng, num_sounds_range: Tuple[int, int] = (15, 30)) -> Dict[str, Any]:
     long_sig_opts = ["4/4(16)", "3/4(16)", "7/8(16)", "5/4(16)"]
     short_sig_opts = [
         "4/4(8)",
@@ -91,7 +91,7 @@ def autopilot_config(rng) -> Dict[str, Any]:
         "preset": preset,
         "bpm": float(bpm),
         "num_sources": rng.randint(4, 8),
-        "num_sounds": rng.randint(15, 30),
+        "num_sounds": rng.randint(num_sounds_range[0], num_sounds_range[1]),
         "crossfade": rng.uniform(0.01, 0.04),
         "stems": rng.random() < 0.3,
         "microfill": rng.random() < 0.5,
@@ -172,7 +172,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--strict-license", action="store_true", help="Enforce license allow-list strictly (no fallback).")
     p.add_argument("--cache-dir", type=str, default=os.path.expanduser("~/.beatsmith/cache"), help="Download cache directory.")
     p.add_argument("--min-rms", type=float, default=0.02, help="Minimum RMS for audible slice.")
-    p.add_argument("--num-sounds", type=int, default=None, help="Number of slices to generate (default: 15-30 random).")
+    p.add_argument(
+        "--num-sounds",
+        type=str,
+        default=None,
+        help="Total slices or range like '20-40' (default: random 15-30).",
+    )
     p.add_argument("--crossfade", type=float, default=0.02, help="Seconds of crossfade between measures.")
     p.add_argument("--tempo-fit", choices=["off","loose","strict"], default="strict", help="Time-stretch mode to fit global measure length.")
     p.add_argument("--stems", action="store_true", help="Write stems per bus/measure.")
@@ -212,13 +217,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main():
     args = build_parser().parse_args()
+    # Parse num_sounds argument which may be a single integer or range "a-b"
+    ns_val: Optional[int] = None
+    ns_range = (15, 30)
+    if args.num_sounds:
+        if "-" in args.num_sounds:
+            a, b = args.num_sounds.split("-", 1)
+            ns_range = (int(a), int(b))
+        else:
+            ns_val = int(args.num_sounds)
+            ns_range = (ns_val, ns_val)
+    args.num_sounds = ns_val
+    args.num_sounds_range = ns_range
     if args.verbose:
         log.setLevel(logging.DEBUG)
         li("Verbose logging enabled.")
     seed = args.seed or f"auto-{time.time_ns()}"
     rng = seeded_rng(seed, args.salt)
     if args.auto or args.out_dir is None or args.sig_map is None:
-        auto = autopilot_config(rng)
+        auto = autopilot_config(rng, num_sounds_range=args.num_sounds_range)
         if args.auto or args.out_dir is None:
             args.out_dir = auto["out_dir"]
         if args.auto or args.sig_map is None:
@@ -229,6 +246,8 @@ def main():
             cur = getattr(args, k, None)
             if args.auto or cur in (None, 0, 0.0, False, "off"):
                 setattr(args, k, v)
+    if args.num_sounds is None:
+        args.num_sounds = rng.randint(*args.num_sounds_range)
     args.seed = seed
     apply_preset(args)
     if args.provider == "local":
