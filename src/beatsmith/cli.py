@@ -118,6 +118,7 @@ def autopilot_config(
         "stems": rng.random() < 0.3,
         "microfill": rng.random() < 0.5,
         "beat_align": rng.random() < 0.5,
+        "mix_layers": 6,
         "tempo_fit": rng.choice(["off", "loose", "strict"]),
         "compress": rng.random() < 0.5,
         "eq_low": rng.uniform(-3, 3),
@@ -183,6 +184,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Total slices or range like '20-40' (default: random 15-30).",
+    )
+    p.add_argument(
+        "--mix-layers",
+        type=int,
+        default=6,
+        help="Number of independent mixes to stack for denser output (default: 6).",
     )
     p.add_argument("--crossfade", type=float, default=0.02, help="Seconds of crossfade between measures.")
     p.add_argument("--tempo-fit", choices=["off","loose","strict"], default="strict", help="Time-stretch mode to fit global measure length.")
@@ -347,28 +354,36 @@ def main():
     total_sec = sum(seconds_per_measure(args.bpm, n, d) for n, d in measures)
     li(f"Total measures: {len(measures)}  est length ≈ {total_sec:.1f}s")
     align_name = "beat" if args.beat_align else "onset"
-    li(f"Assembling {align_name}-aligned measures (perc + tex buses)...")
-    mix_perc, mix_tex = assemble_track(
-        None,
-        None,
-        sources,
-        measures,
-        bpm=args.bpm,
-        rng=rng,
-        min_rms=args.min_rms,
-        crossfade_s=args.crossfade,
-        tempo_mode=args.tempo_fit,
-        stems_dirs=stems_dirs,
-        microfill=args.microfill,
-        beat_align=bool(args.beat_align),
-        refine_boundaries=args.boundary_refine,
-        num_sounds=args.num_sounds,
-    )
+    li(f"Assembling {align_name}-aligned measures (perc + tex buses) across {args.mix_layers} layers...")
     tex_gain = 10 ** (-3.0 / 20.0)
-    L = max(len(mix_perc), len(mix_tex))
-    if len(mix_perc) < L: mix_perc = np.pad(mix_perc, (0, L-len(mix_perc)))
-    if len(mix_tex)  < L: mix_tex  = np.pad(mix_tex,  (0, L-len(mix_tex)))
-    mix = mix_perc + tex_gain * mix_tex
+    layers = []
+    for layer in range(args.mix_layers):
+        mix_perc, mix_tex = assemble_track(
+            None,
+            None,
+            sources,
+            measures,
+            bpm=args.bpm,
+            rng=rng,
+            min_rms=args.min_rms,
+            crossfade_s=args.crossfade,
+            tempo_mode=args.tempo_fit,
+            stems_dirs=stems_dirs if layer == 0 else {},
+            microfill=args.microfill,
+            beat_align=bool(args.beat_align),
+            refine_boundaries=args.boundary_refine,
+            num_sounds=args.num_sounds,
+        )
+        L = max(len(mix_perc), len(mix_tex))
+        if len(mix_perc) < L: mix_perc = np.pad(mix_perc, (0, L-len(mix_perc)))
+        if len(mix_tex)  < L: mix_tex  = np.pad(mix_tex,  (0, L-len(mix_tex)))
+        layers.append(mix_perc + tex_gain * mix_tex)
+    max_len = max(len(l) for l in layers)
+    mix = np.zeros(max_len, dtype=np.float32)
+    for l in layers:
+        if len(l) < max_len:
+            l = np.pad(l, (0, max_len - len(l)))
+        mix += l
     if args.build_on:
         try:
             li(f"Loading base track: {args.build_on}")

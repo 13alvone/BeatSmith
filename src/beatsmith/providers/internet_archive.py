@@ -66,6 +66,12 @@ def ia_search_random(
     strict: bool,
 ) -> List[Dict]:
     q_parts = ['mediatype:(audio)']
+    # Prefer non-musical material such as speeches, interviews, and field recordings
+    q_parts.append(
+        'subject:(speech OR interview OR lecture OR "field recording" OR podcast OR ambient OR noise OR "sound effect" OR "sound effects")'
+    )
+    # Explicitly exclude common musical material
+    q_parts.append('-subject:(music OR musical OR song OR album OR band OR orchestra OR symphony)')
     if query_bias:
         q_parts.append(f'({query_bias})')
     q = " AND ".join(q_parts)
@@ -115,12 +121,17 @@ def ia_pick_files_for_item(identifier: str) -> List[Dict]:
     for f in files:
         name = f.get("name") or ""
         lower = name.lower()
-        if any(lower.endswith(ext) for ext in AUDIO_EXTS):
+        title = meta.get("metadata", {}).get("title", "") or ""
+        title_lower = title.lower()
+        skip_terms = ["music", "song", "track", "band", "orchestra", "symphony"]
+        if any(lower.endswith(ext) for ext in AUDIO_EXTS) and not any(
+            term in lower or term in title_lower for term in skip_terms
+        ):
             picked.append(
                 {
                     "identifier": identifier,
                     "name": name,
-                    "title": meta.get("metadata", {}).get("title"),
+                    "title": title,
                     "licenseurl": meta.get("metadata", {}).get("licenseurl"),
                     "url": f"https://archive.org/download/{identifier}/{name}",
                 }
