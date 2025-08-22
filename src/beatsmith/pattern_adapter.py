@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Utilities for adapting drum patterns to quantized sample slices.
 
 This module provides :func:`apply_pattern_to_quantized_slices` which maps a
@@ -28,35 +26,15 @@ The goal is to stay lightweight while being flexible enough for tests and
 future features.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional, Sequence
+from typing import List, Mapping, Optional, Sequence
 import random
 
 import numpy as np
 
-# ---------------------------------------------------------------------------
-# General MIDI note -> lane mapping
-# ---------------------------------------------------------------------------
-
-# Mapping of General MIDI drum note numbers to canonical instrument lanes.
-GM_NOTE_TO_LANE: Dict[int, str] = {
-    35: "kick", 36: "kick",
-    38: "snare", 40: "snare", 37: "snare", 39: "snare",
-    42: "hh_closed", 44: "hh_closed",
-    46: "hh_open",
-    41: "tom_low", 43: "tom_low",
-    45: "tom_mid", 47: "tom_mid",
-    48: "tom_high", 50: "tom_high",
-    49: "crash", 57: "crash", 55: "crash",
-    51: "ride", 53: "ride", 59: "ride", 52: "ride",
-}
-
-# Normalized list of lane names encountered above.
-LANES: List[str] = sorted(set(GM_NOTE_TO_LANE.values()))
-
-# Default lane remapping used if a caller does not supply their own mapping.
-# It simply maps each lane to itself but allows a single point of customization.
-DEFAULT_LANE_MAP: Dict[str, str] = {lane: lane for lane in LANES}
+from .pattern_constants import GM_NOTE_TO_LANE, LANES, DEFAULT_LANE_MAP  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
