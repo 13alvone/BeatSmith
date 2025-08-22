@@ -1,17 +1,17 @@
 from pathlib import Path
-import random
 import importlib.util
+import random
 
 import numpy as np
 from mido import MidiFile, MidiTrack, Message
+
+from beatsmith.pattern_adapter import apply_pattern_to_quantized_slices
 
 spec = importlib.util.spec_from_file_location(
     "drum_patterns", Path(__file__).resolve().parents[1] / "tools" / "drum_patterns.py"
 )
 drum_patterns = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(drum_patterns)
-
-from beatsmith.pattern_adapter import apply_pattern_to_quantized_slices
 
 
 def _write_test_midi(path: Path) -> None:
