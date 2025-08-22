@@ -7,19 +7,7 @@ from pathlib import Path
 
 from mido import MidiFile, merge_tracks
 
-# Mapping of General MIDI drum notes to normalized instrument lanes
-NOTE_TO_LANE = {
-    35: "kick", 36: "kick",
-    38: "snare", 40: "snare", 37: "snare", 39: "snare",
-    42: "hh_closed", 44: "hh_closed",
-    46: "hh_open",
-    41: "tom_low", 43: "tom_low",
-    45: "tom_mid", 47: "tom_mid",
-    48: "tom_high", 50: "tom_high",
-    49: "crash", 57: "crash", 55: "crash",
-    51: "ride", 53: "ride", 59: "ride", 52: "ride",
-}
-LANES = sorted(set(NOTE_TO_LANE.values()))
+from beatsmith.pattern_constants import GM_NOTE_TO_LANE, LANES
 
 
 class PrefixFormatter(logging.Formatter):
@@ -67,7 +55,7 @@ def parse_midi(path: Path, subdivision: int) -> dict:
         elif msg.type == "time_signature":
             time_sig = (msg.numerator, msg.denominator)
         elif msg.type == "note_on" and msg.velocity > 0:
-            lane = NOTE_TO_LANE.get(msg.note)
+            lane = GM_NOTE_TO_LANE.get(msg.note)
             if lane is None:
                 continue
             beats = current_ticks / ticks_per_beat
