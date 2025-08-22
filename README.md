@@ -224,12 +224,32 @@ See `ROADMAP.md` for concrete plugin/registry plans and task breakdowns.
 ---
 
 ## Examples
-	# Groovey EDM Autopilot with stems
-	python -m beatsmith --auto --preset edm --stems
+        # Groovey EDM Autopilot with stems
+        python -m beatsmith --auto --preset edm --stems
 
-	# Tight 7/8 texture piece from ambient sources
-	python -m beatsmith out "7/8(12)" --bpm 126 --preset lofi \
-		--query-bias "ambient texture OR pad" --tempo-fit loose --stems
+        # Tight 7/8 texture piece from ambient sources
+        python -m beatsmith out "7/8(12)" --bpm 126 --preset lofi \
+                --query-bias "ambient texture OR pad" --tempo-fit loose --stems
+
+---
+
+## Pattern Oracle (optional)
+BeatSmith can optionally overlay quantized drum patterns sourced from MIDI files.
+
+### Build the pattern database
+        pip install mido
+        python tools/drum_patterns.py ingest <midi_dir>
+
+This creates `~/.beatsmith/patterns.db` by default; pass `--db` to override.
+
+### Enable pattern overlay
+        python -m beatsmith out "4/4(8)" --bpm 120 \\
+                --pattern-enable --pattern-db ~/.beatsmith/patterns.db \\
+                --pattern-sig 4/4 --pattern-lane-map kick=perc,snare=perc
+
+`--pattern-enable` turns on pattern placement. Without `--pattern-db`, BeatSmith
+looks for `~/.beatsmith/patterns.db`. By default all lanes pull from the `perc`
+bus; override with `--pattern-lane-map lane=bus,...`.
 
 ---
 
