@@ -8,6 +8,7 @@ import math
 import uuid
 import zipfile
 import shutil
+import subprocess
 from typing import Any, Dict, Optional, Tuple, Set
 
 import numpy as np
@@ -17,13 +18,14 @@ from . import li, lw, le, log
 from .audio import (
     parse_sig_map, seconds_per_measure, seeded_rng, normalize_peak,
     load_audio_file, pick_sources, build_measures, assemble_track, TARGET_SR,
-    preview_sources, safe_audio,
+    preview_sources, safe_audio, pick_onset_aligned_window, stack_slices,
 )
 from .fx import (
     compressor, eq_three_band, reverb_schroeder, tremolo, phaser, echo, lookahead_sidechain
 )
 from .providers.internet_archive import InternetArchiveProvider
 from .providers.local import LocalProvider
+from .pattern_adapter import apply_pattern_to_quantized_slices
 
 USED_SOURCES_REGISTRY = os.path.expanduser("~/.beatsmith/used_sources.json")
 FX_CHANCE = 0.2  # probability gate for applying any given effect
@@ -228,6 +230,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--echo-ms", type=float, default=0.0, help=">0 to enable post-loop (ms delay, ~20%% chance)")
     p.add_argument("--echo-fb", type=float, default=0.3, help="Feedback 0..1")
     p.add_argument("--echo-mix", type=float, default=0.25, help="Wet mix 0..1")
+
+    # Pattern options
+    p.add_argument("--pattern-enable", action="store_true", help="Enable drum pattern overlay")
+    p.add_argument("--pattern-db", type=str, default=None, help="Path to drum pattern SQLite DB")
+    p.add_argument("--pattern-sig", type=str, default=None, help="Pattern signature filter")
+    p.add_argument("--pattern-bars", type=int, default=None, help="Pattern bars filter")
+    p.add_argument("--pattern-subdivs", type=int, default=None, help="Pattern subdivision filter")
+    p.add_argument("--pattern-swing", type=float, default=0.0, help="Swing amount 0..1 for pattern")
+    p.add_argument("--pattern-humanize-ms", type=float, default=0.0, help="Timing humanization in ms")
+    p.add_argument("--pattern-vel-scale", type=float, default=1.0, help="Velocity scale for pattern hits")
+    p.add_argument(
+        "--pattern-lane-map",
+        type=str,
+        default=None,
+        help="Comma list mapping pattern lanes to sample keys, e.g. 'kick=perc,snare=perc'",
+    )
+    p.add_argument(
+        "--pattern-silence-missing",
+        action="store_true",
+        help="Silence missing lanes instead of warning",
+    )
     return p
 
 def main():
@@ -353,6 +376,90 @@ def main():
     measures = build_measures(args.sig_map)
     total_sec = sum(seconds_per_measure(args.bpm, n, d) for n, d in measures)
     li(f"Total measures: {len(measures)}  est length ≈ {total_sec:.1f}s")
+    pattern_mix = None
+    if args.pattern_enable:
+        if not args.pattern_db or not os.path.isfile(args.pattern_db):
+            le(f"Pattern DB not found: {args.pattern_db}")
+        else:
+            script = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools", "drum_patterns.py"))
+            cmd = [sys.executable, script, "sample", args.pattern_db]
+            if args.pattern_sig:
+                cmd += ["--signature", args.pattern_sig]
+            if args.pattern_bars is not None:
+                cmd += ["--bars", str(args.pattern_bars)]
+            if args.pattern_subdivs is not None:
+                cmd += ["--subdivision", str(args.pattern_subdivs)]
+            try:
+                res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if res.returncode != 0:
+                    lw("Pattern sample failed; continuing without pattern")
+                else:
+                    pat = json.loads(res.stdout.strip() or "{}")
+                    if pat:
+                        lane_map = {}
+                        if args.pattern_lane_map:
+                            for part in args.pattern_lane_map.split(","):
+                                if not part:
+                                    continue
+                                if "=" in part:
+                                    k, v = part.split("=", 1)
+                                elif ":" in part:
+                                    k, v = part.split(":", 1)
+                                else:
+                                    continue
+                                lane_map[k.strip()] = v.strip()
+                        step_dur_s = (60.0 / max(args.bpm, 1e-6)) * (
+                            (int(pat.get("signature", "4/4").split("/")[0]) * 4.0 / int(pat.get("signature", "4/4").split("/")[1]))
+                            / float(pat.get("subdivision", 16))
+                        )
+                        sample_keys = set(lane_map.values()) if lane_map else {"perc"}
+                        sample_registry: Dict[str, list[np.ndarray]] = {}
+                        for key in sample_keys:
+                            pool = [s for s in sources if s.bus == key]
+                            if not pool:
+                                if args.pattern_silence_missing:
+                                    sample_registry[key] = [np.zeros(int(step_dur_s * TARGET_SR), dtype=np.float32)]
+                                else:
+                                    lw(f"No sources for pattern lane '{key}'")
+                                continue
+                            sample_registry[key] = []
+                            for src in pool:
+                                try:
+                                    s0, s1, _ = pick_onset_aligned_window(
+                                        src.y,
+                                        src.sr,
+                                        step_dur_s,
+                                        rng=rng,
+                                        min_rms=args.min_rms,
+                                        refine_edges=args.boundary_refine,
+                                    )
+                                    seg = src.y[s0:s1].astype(np.float32)
+                                    sample_registry[key].append(seg)
+                                except Exception:
+                                    continue
+                        if sample_registry:
+                            placements = apply_pattern_to_quantized_slices(
+                                pat,
+                                sample_registry,
+                                args.bpm,
+                                swing=args.pattern_swing,
+                                humanize_s=args.pattern_humanize_ms / 1000.0,
+                                velocity_scale=args.pattern_vel_scale,
+                                lane_map=lane_map if lane_map else None,
+                                rng=rng,
+                            )
+                            track_len = int(total_sec * TARGET_SR)
+                            pattern_slices = []
+                            for pl in placements:
+                                idx = int(pl.start_s * TARGET_SR)
+                                if idx >= track_len:
+                                    continue
+                                pattern_slices.append((pl.data, idx))
+                            pattern_mix = stack_slices(track_len, pattern_slices)
+                    else:
+                        lw("No pattern returned; continuing without pattern")
+            except Exception as e:
+                lw(f"Pattern sampling failed: {e}")
     align_name = "beat" if args.beat_align else "onset"
     li(f"Assembling {align_name}-aligned measures (perc + tex buses) across {args.mix_layers} layers...")
     tex_gain = 10 ** (-3.0 / 20.0)
@@ -378,6 +485,8 @@ def main():
         if len(mix_perc) < L: mix_perc = np.pad(mix_perc, (0, L-len(mix_perc)))
         if len(mix_tex)  < L: mix_tex  = np.pad(mix_tex,  (0, L-len(mix_tex)))
         layers.append(mix_perc + tex_gain * mix_tex)
+    if pattern_mix is not None:
+        layers.append(pattern_mix)
     max_len = max(len(l) for l in layers)
     mix = np.zeros(max_len, dtype=np.float32)
     for l in layers:
