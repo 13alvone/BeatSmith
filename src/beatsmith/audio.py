@@ -691,6 +691,7 @@ def assemble_track(
             seg, factor = time_stretch_to_length(seg, src.sr, dur_samples, tempo_mode)
             if bus == "tex" and microfill and rng.random() < 0.25:
                 fill_len = max(int(0.2 * TARGET_SR), 1)
+                fill_len = min(fill_len, len(seg))
                 s0f = max(0, s1 - fill_len - 1)
                 fill = src.y[s0f : s0f + fill_len]
                 if len(fill) < fill_len:
