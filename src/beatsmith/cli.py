@@ -237,7 +237,7 @@ def pick_window(y: np.ndarray, sr: int, dur_s: float, rng) -> Tuple[int, int]:
     win = max(int(dur_s * sr), 1)
     if n <= win:
         return 0, n
-    s0 = rng.randrange(0, n - win)
+    s0 = rng.randrange(0, n - win + 1)
     return s0, s0 + win
 
 

@@ -307,9 +307,8 @@ def pick_onset_aligned_window(
     n = len(y)
     win = max(int(dur_s * sr), 1)
     if n <= win:
-        reps = int(math.ceil(win / max(n,1))) + 1
-        y = np.tile(y, reps)
-        n = len(y)
+        energy = float(np.sqrt(np.mean(y**2) + 1e-12))
+        return 0, n, energy
     oenv, _ = onset_envelope(y, sr)
     onset_idx = librosa.onset.onset_detect(onset_envelope=oenv, sr=sr, units="samples", backtrack=True)
     if onset_idx.size == 0:
@@ -359,9 +358,8 @@ def pick_beat_aligned_window(
     n = len(y)
     win = max(int(dur_s * sr), 1)
     if n <= win:
-        reps = int(math.ceil(win / max(n, 1))) + 1
-        y = np.tile(y, reps)
-        n = len(y)
+        energy = float(np.sqrt(np.mean(y**2) + 1e-12))
+        return 0, n, energy
 
     # Detect beat locations in samples
     _, beats = librosa.beat.beat_track(y=y, sr=sr, units="samples")
