@@ -167,15 +167,15 @@ Primary command:
 - `--fx-prob FLOAT` (default 1.0)
 - `--fx-chain-style {tasteful,aggressive,random}` (default tasteful)
 - `--fx-room {small,mid,large}` (optional)
-- `--fx-tag-filenames` (default true)
+- `--fx-tag-filenames` (default true; use `--no-fx-tag-filenames` to omit tags)
 
 ### Output
-- `--export-mono` (default true)
-- `--export-stereo` (default true)
-- `--stereo-prefer` (default true; if mono source, stereo export is dual-mono)
+- `--export-mono` (default true; disable with `--no-export-mono`)
+- `--export-stereo` (default true; disable with `--no-export-stereo`)
+- `--stereo-prefer` (default true; if mono source, stereo export is dual-mono; disable with `--no-stereo-prefer`)
 - `--pack-name STR` (default auto `SamplePack_YYYYMMDD_HHMMSS_seed`)
-- `--write-manifest` (default true)
-- `--write-credits` (default true)
+- `--write-manifest` (default true; disable with `--no-write-manifest`)
+- `--write-credits` (default true; disable with `--no-write-credits`)
 - `--zip-pack` (optional)
 
 ---
