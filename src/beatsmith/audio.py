@@ -79,7 +79,10 @@ def seeded_rng(seed: Optional[str], salt: Optional[str]) -> random.Random:
 
 # ---------------------------- Audio utils ----------------------------
 def load_audio_from_bytes(
-    b: bytes, sr: int = TARGET_SR, filename: Optional[str] = None
+    b: bytes,
+    sr: int = TARGET_SR,
+    filename: Optional[str] = None,
+    mono: bool = True,
 ) -> Tuple[np.ndarray, int]:
     """Decode audio from a byte string.
 
@@ -109,7 +112,7 @@ def load_audio_from_bytes(
         tmp.flush()
 
     try:
-        y, srr = librosa.load(tmp_path, sr=sr, mono=True)
+        y, srr = librosa.load(tmp_path, sr=sr, mono=mono)
     finally:
         os.remove(tmp_path)
 
@@ -122,6 +125,108 @@ def load_audio_file(path: str, sr: int = TARGET_SR) -> Tuple[np.ndarray, int]:
     if not np.isfinite(y).any() or y.size == 0:
         raise ValueError("Decoded audio is empty/invalid")
     return y.astype(np.float32), srr
+
+def downmix_to_mono(y: np.ndarray) -> np.ndarray:
+    if y.ndim == 1:
+        return y.astype(np.float32)
+    return np.mean(y, axis=0).astype(np.float32)
+
+def trim_silence(
+    y: np.ndarray,
+    sr: int,
+    top_db: float,
+    pad_ms: int,
+) -> Tuple[np.ndarray, int, int]:
+    mono = downmix_to_mono(y)
+    if mono.size == 0:
+        return y, 0, 0
+    yt, idx = librosa.effects.trim(mono, top_db=top_db)
+    start, end = int(idx[0]), int(idx[1])
+    pad = int(sr * pad_ms / 1000.0)
+    start = max(0, start - pad)
+    end = min(mono.size, end + pad)
+    if start >= end:
+        return y, 0, mono.size
+    if y.ndim == 1:
+        return y[start:end].astype(np.float32), start, end
+    return y[:, start:end].astype(np.float32), start, end
+
+def apply_fades(y: np.ndarray, sr: int, fade_in_ms: int, fade_out_ms: int) -> np.ndarray:
+    if y.size == 0:
+        return y
+    fade_in = max(int(sr * fade_in_ms / 1000.0), 0)
+    fade_out = max(int(sr * fade_out_ms / 1000.0), 0)
+    n = y.shape[-1] if y.ndim > 1 else len(y)
+    if fade_in > 0:
+        ramp = np.linspace(0.0, 1.0, min(fade_in, n), dtype=np.float32)
+        if y.ndim == 1:
+            y[: len(ramp)] *= ramp
+        else:
+            y[:, : len(ramp)] *= ramp
+    if fade_out > 0:
+        ramp = np.linspace(1.0, 0.0, min(fade_out, n), dtype=np.float32)
+        if y.ndim == 1:
+            y[-len(ramp):] *= ramp
+        else:
+            y[:, -len(ramp):] *= ramp
+    return y
+
+def normalize_rms(y: np.ndarray, target_rms: float) -> np.ndarray:
+    rms = float(np.sqrt(np.mean(y**2) + 1e-12))
+    if rms <= 0.0:
+        return y.astype(np.float32)
+    g = target_rms / rms
+    return (y * g).astype(np.float32)
+
+def normalize_audio(
+    y: np.ndarray,
+    mode: str,
+    peak_db: float,
+    target_rms: Optional[float] = None,
+) -> np.ndarray:
+    if mode == "rms" and target_rms is not None:
+        y = normalize_rms(y, target_rms)
+    y = normalize_peak(y, peak_db=peak_db)
+    return y
+
+def duration_bucket(
+    duration_s: float,
+    bpm_assumption: float,
+    tolerance: float,
+    longform: bool = False,
+) -> str:
+    if longform:
+        return "lf"
+    sec_per_beat = 60.0 / max(bpm_assumption, 1e-6)
+    beats = duration_s / sec_per_beat
+    buckets = [
+        (0.125, "t2"),
+        (0.25, "six"),
+        (0.5, "e"),
+        (1.0, "q"),
+        (2.0, "h"),
+        (4.0, "w"),
+        (8.0, "b2"),
+        (16.0, "b4"),
+    ]
+    best = min(buckets, key=lambda b: abs(beats - b[0]))
+    if abs(beats - best[0]) / max(best[0], 1e-6) <= tolerance:
+        return best[1]
+    return "free"
+
+def infer_bpm(y: np.ndarray, sr: int) -> Tuple[Optional[float], float]:
+    mono = downmix_to_mono(y)
+    if mono.size == 0:
+        return None, 0.0
+    tempo, beats = librosa.beat.beat_track(y=mono, sr=sr, units="time")
+    if tempo <= 0 or not np.isfinite(tempo):
+        return None, 0.0
+    if len(beats) < 2:
+        return float(tempo), 0.2
+    duration = float(len(mono) / sr)
+    expected_beats = max(duration / (60.0 / tempo), 1.0)
+    confidence = min(1.0, len(beats) / expected_beats)
+    return float(tempo), float(confidence)
 
 def normalize_peak(y: np.ndarray, peak_db: float = -0.8) -> np.ndarray:
     peak = np.max(np.abs(y)) + 1e-12

@@ -1,14 +1,15 @@
 import argparse
 import sys
 
-from .cli import main as run_main
+from .cli import main as harvest_main
 from .inspect import main as inspect_main
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="beatsmith")
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("inspect", help="Summarize latest BeatSmith run.")
+    sub.add_parser("harvest", help="Harvest sample packs for MPC workflows.")
+    sub.add_parser("inspect", help="Summarize latest SampleSmith pack.")
     return parser
 
 
@@ -18,9 +19,10 @@ def main(argv: list[str] | None = None):
     args, remainder = parser.parse_known_args(argv)
     if args.command == "inspect":
         inspect_main(remainder)
+    elif args.command == "harvest":
+        harvest_main(remainder)
     else:
-        sys.argv = [sys.argv[0]] + remainder
-        run_main()
+        harvest_main(argv)
 
 
 if __name__ == "__main__":

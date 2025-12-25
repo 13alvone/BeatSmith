@@ -1,78 +1,44 @@
 from typing import Optional
 import argparse
-from collections import defaultdict
+import json
+from pathlib import Path
 
 from . import li, le
-from .db import db_open, find_latest_db, read_last_run
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Summarize latest BeatSmith run.")
-    p.add_argument("--root", type=str, default=".", help="Search root for beatsmith_v3.db")
-    p.add_argument("--db", type=str, default=None, help="Explicit path to beatsmith_v3.db")
+    p = argparse.ArgumentParser(description="Summarize latest SampleSmith pack.")
+    p.add_argument("--root", type=str, default=".", help="Search root for pack.json")
+    p.add_argument("--pack", type=str, default=None, help="Explicit path to pack.json")
     return p
+
+
+def find_latest_pack(root: str) -> Optional[str]:
+    paths = list(Path(root).rglob("pack.json"))
+    if not paths:
+        return None
+    latest = max(paths, key=lambda p: p.stat().st_mtime)
+    return str(latest)
 
 
 def main(argv: Optional[list[str]] = None):
     args = build_parser().parse_args(argv)
-    db_path = args.db or find_latest_db(args.root)
-    if not db_path:
-        le("No beatsmith_v3.db found")
+    pack_path = args.pack or find_latest_pack(args.root)
+    if not pack_path:
+        le("No pack.json found")
         return
-    conn = db_open(db_path)
-    run = read_last_run(conn)
-    if not run:
-        le("No runs recorded in DB")
-        return
-    li(f"DB: {db_path}")
-    li(
-        f"Run id={run['id']} created={run['created_at']} BPM={run['bpm']} "
-        f"sig_map={run['sig_map']} seed={run['seed']} salt={run['salt']}"
-    )
-    if run["params"]:
-        li("Params:")
-        for k in sorted(run["params"].keys()):
-            li(f"  {k}: {run['params'][k]}")
-    li(f"Sources: {run['num_sources']}  segments: {run['num_segments']}")
+    with open(pack_path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    li(f"Pack: {pack_path}")
+    li(f"Run id={data.get('run_id')} seed={data.get('seed')} salt={data.get('salt')}")
+    li(f"Samples: {len(data.get('samples', []))} variants: {len(data.get('variants', []))}")
 
-    cur = conn.execute(
-        """
-        SELECT s.title, s.bus, s.licenseurl,
-               COUNT(seg.id) AS ct,
-               COALESCE(SUM(seg.dur_s), 0.0) AS dur
-        FROM sources s
-        LEFT JOIN segments seg ON seg.source_id = s.id
-        WHERE s.run_id = ?
-        GROUP BY s.id
-        ORDER BY s.bus, s.title
-        """,
-        (run["id"],),
-    )
-    rows = cur.fetchall()
-    if rows:
-        li("Source usage:")
-        for title, bus, lic, ct, dur in rows:
-            lic = lic or "-"
-            li(f"  {bus:<4} {ct:>3}x {dur:>6.2f}s {title} {lic}")
-
-    cur = conn.execute(
-        """
-        SELECT seg.measure_index, seg.bus, s.title
-        FROM segments seg
-        JOIN sources s ON seg.source_id = s.id
-        WHERE seg.run_id = ?
-        ORDER BY seg.measure_index, seg.bus
-        """,
-        (run["id"],),
-    )
-    rows = cur.fetchall()
-    if rows:
-        li("Segments:")
-        by_measure: dict[int, list[str]] = defaultdict(list)
-        for m, bus, title in rows:
-            by_measure[m].append(f"{bus}:{title}")
-        for m in sorted(by_measure):
-            li(f"  {m:03d}: " + ", ".join(by_measure[m]))
+    sources = data.get("sources", [])
+    if sources:
+        li("Sources:")
+        for src in sources:
+            title = src.get("title") or src.get("file") or src.get("identifier") or "unknown"
+            li(f"  {title} {src.get('license') or '-'}")
 
 
 __all__ = ["main"]
