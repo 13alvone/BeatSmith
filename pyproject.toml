@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-beatsmith = "beatsmith.cli:main"
+beatsmith = "beatsmith.__main__:main"
 
 [project.optional-dependencies]
 test = [

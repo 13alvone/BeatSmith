@@ -146,14 +146,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fx-prob", type=float, default=1.0)
     p.add_argument("--fx-chain-style", choices=["tasteful", "aggressive", "random"], default="tasteful")
     p.add_argument("--fx-room", choices=["small", "mid", "large"], default=None)
-    p.add_argument("--fx-tag-filenames", action="store_true", default=True)
+    p.add_argument("--fx-tag-filenames", action=argparse.BooleanOptionalAction, default=True)
 
-    p.add_argument("--export-mono", action="store_true", default=True)
-    p.add_argument("--export-stereo", action="store_true", default=True)
-    p.add_argument("--stereo-prefer", action="store_true", default=True)
+    p.add_argument("--export-mono", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--export-stereo", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--stereo-prefer", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--pack-name", type=str, default=None)
-    p.add_argument("--write-manifest", action="store_true", default=True)
-    p.add_argument("--write-credits", action="store_true", default=True)
+    p.add_argument("--write-manifest", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--write-credits", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--zip-pack", action="store_true")
 
     p.add_argument("--provider", choices=["ia", "local"], default="ia")
@@ -522,7 +522,8 @@ def main(argv: Optional[List[str]] = None) -> None:
 
             form = sample["entry"]["form"]
             base_filename = os.path.basename(next(iter(sample["entry"]["exports"].values())))
-            fx_filename = base_filename.replace(".wav", f"__fx-{fx_tag}.wav")
+            fx_suffix = fx_tag if args.fx_tag_filenames else uuid.uuid4().hex[:6]
+            fx_filename = base_filename.replace(".wav", f"__fx-{fx_suffix}.wav")
             fx_dir = os.path.join(fx_root, fx_tag, form)
             ensure_dir(os.path.join(fx_dir, "stereo"))
             ensure_dir(os.path.join(fx_dir, "mono"))
