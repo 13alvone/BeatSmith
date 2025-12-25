@@ -1,284 +1,232 @@
-# BeatSmith v3 — Open-Web Autopilot Beat Machine
-Deterministic, Internet Archive–powered beat builder that slices audible, onset-aligned chunks from public/CC audio, fits them to your time-signature map, and mixes them through percussive + texture buses with a tasteful FX chain. It supports fully-specified CLI control **and** a zero-args **Autopilot** mode (random banks) so it can surprise you.
+# BeatSmith v4 (“SampleSmith”) — MPC One+ Sample Harvesting Engine
+BeatSmith began as a deterministic, license-aware beat generator. **v4 pivots the project into a sample harvesting and preparation engine** that outputs **large, curated swaths of pad-ready WAV samples** for the AKAI MPC One+. Instead of rendering full beats, the new deliverable is a **high-volume, high-quality sample library** you import into hardware to build your own programs, sequences, and arrangements.
 
-## Highlights
-- Onset-aligned measure slicing (stronger groove feel than naïve chopping)
-- Multi-bus architecture: **percussive** & **texture** lanes with separate selection and mix
-- Deterministic seeding (`--seed`, `--salt`) for reproducible chaos
-- **Autopilot**: run with no arguments → random signature map, preset, BPM, sources, and FX
-- License hygiene: prefer/allowlist CC/PD sources from Internet Archive
-- Time-stretch to fit measure length: `--tempo-fit off|loose|strict`
-- Built-on layering: mix on top of your own track, optional lookahead sidechain
-- FX chain: per-groove compressor+3-band EQ, then post-loop reverb/tremolo/phaser/echo (each ~20% chance)
-- SQLite logging of runs, sources, and per-measure segments for full provenance
-- Caching of downloads (`~/.beatsmith/cache` by default)
-- Stems per bus/measure (optional)
-- **Designed for extensibility**: future FX, source providers, and selection strategies
+BeatSmith v4 retains the strongest primitives from v3—deterministic acquisition, reproducible randomness, audio decoding, onset-based slicing, normalization utilities, FX chains, and provenance logging—while replacing beat assembly with a clean, MPC-friendly export pipeline.
 
 ---
 
-## Quick Start (Autopilot: no flags)
-See [Installation](#installation) to set up Python, ffmpeg, and the project's dependencies.
-Once installed, run with zero args — BeatSmith v3 will pick everything (sig map, BPM, preset, sources, FX):
+## Executive Summary (v4)
+- **Purpose shift:** from “automatic beat composer” → **“sample pack generator for musicians.”**
+- **Core output:** pad-ready WAV files, **44.1 kHz / 16-bit PCM**, **stereo + mono** exports for every sample unit.
+- **No time-stretching or duration forcing.** Only trim silence, add tiny fades, and normalize.
+- **Optional FX variants** are exported alongside clean samples, in a separate folder with explicit naming.
+- **Deterministic + license-aware** Internet Archive harvesting, with **full provenance** (manifest + optional SQLite).
+- **Quantization is labeling only:** durations are bucketed (q/e/six/t2, etc.) without resizing.
 
-        python -m beatsmith
+---
 
-	# Output directory is created automatically (e.g., ./beatsmith_auto/bs_YYYYMMDD_HHMMSS_XXXX)
-	# The final WAV and beatsmith_v3.db (SQLite) live there; stems if Autopilot enabled them.
+## Quick Start (v4 harvest)
+After installing dependencies, generate a sample pack:
+
+    # Minimal harvest (deterministic if you capture seed/salt)
+    beatsmith harvest ./out_pack --seed cafe89 --c 10
+
+    # Dry run: print plan only
+    beatsmith harvest ./out_pack --dry-run
 
 ---
 
 ## Installation
 Python 3.10+ and `ffmpeg` are required. Use a virtual environment to keep dependencies isolated:
 
-        # System requirements
-        - Python 3.10+
-        - ffmpeg (for decoding MP3/OGG/etc through librosa/audioread)
-            - macOS: `brew install ffmpeg`
-            - Debian/Ubuntu: `sudo apt install ffmpeg`
-            - Windows: https://ffmpeg.org/download.html or `choco install ffmpeg`
-        - macOS/Linux/WSL tested; Windows should work with ffmpeg on PATH
+    # System requirements
+    - Python 3.10+
+    - ffmpeg (for decoding MP3/OGG/etc)
+        - macOS: `brew install ffmpeg`
+        - Debian/Ubuntu: `sudo apt install ffmpeg`
+        - Windows: https://ffmpeg.org/download.html or `choco install ffmpeg`
+    - macOS/Linux/WSL tested; Windows should work with ffmpeg on PATH
 
-        # Verify ffmpeg is available
-        ffmpeg -version
+    # Verify ffmpeg is available
+    ffmpeg -version
 
-        # Create env and install the project
-        python3 -m venv .venv
-        source .venv/bin/activate  # macOS/Linux
-        .\.venv\Scripts\activate  # Windows PowerShell
-        pip install -e .  # or `pip install .`
-
----
-
-## Usage
-
-### 1) Autopilot (random banks, reproducible if you capture the seed)
-	# Full Autopilot
-	python -m beatsmith
-
-	# Semi-auto: you supply out_dir; everything else randomized
-	python -m beatsmith ./out_autogen
-
-	# Force Autopilot even when passing some options
-	python -m beatsmith --auto --stems
-
-BeatSmith prints the chosen `seed`/`salt`, `sig_map`, preset, BPM, query bias, FX, etc. Reuse those to reproduce the exact render.
-
-        # Example reproducible run
-        $ python -m beatsmith
-        [i] Run id=42 preset=lofi BPM=78.3 sig_map=3/4(8) seed='cafe89'
-        [i] FX: compressor, reverb 0.12@0.40
-
-        # Recreate that exact beat later
-        $ python -m beatsmith out "3/4(8)" --bpm 78.3 --preset lofi \
-                --seed cafe89 --compress --reverb-mix 0.12 --reverb-room 0.40
-
-### 2) Fully specified (classic control)
-	# 8 measures of 4/4 at 124 BPM, boom-bap preset, stems on
-	python -m beatsmith out "4/4(8)" --bpm 124 --preset boom-bap --stems
-
-        # Mixed signatures, license allow-list strict, more sounds, tasteful FX
-        python -m beatsmith out "4/4(4),5/4(3),6/8(5)" --bpm 132 \
-                --license-allow "cc0,cc-by,public domain" --strict-license \
-                --num-sounds 32 --tempo-fit strict --compress \
-                --eq-low +2 --eq-mid -1 --eq-high +3 \
-                --reverb-mix 0.22 --reverb-room 0.35 \
-                --tremolo-rate 5 --tremolo-depth 0.35 \
-                --echo-ms 320 --echo-fb 0.28 --echo-mix 0.22 \
-                --stems
-
-	# Build on your existing loop with lookahead sidechain pumping
-        python -m beatsmith out "4/4(16)" --bpm 124 --build-on ./my_loop.wav \
-                --sidechain 0.6 --sidechain-lookahead-ms 10 --preset edm
-
-### 3) Dry run (plan without downloads)
-        # See planned measures and candidate sources, but skip audio fetch
-        python -m beatsmith out "4/4(8)" --dry-run
-
-### 4) Inspect previous run
-        # `inspect` subcommand: summarize latest beatsmith_v3.db under current directory
-        beatsmith inspect
-
-### 5) Presets
-	--preset boom-bap | edm | lofi
-
-Presets bias EQ, FX, and query terms sensibly. You can still override any knob.
+    # Create env and install the project
+    python3 -m venv .venv
+    source .venv/bin/activate  # macOS/Linux
+    .\.venv\Scripts\activate  # Windows PowerShell
+    pip install -e .  # or `pip install .`
 
 ---
 
-## CLI Reference (most relevant options)
-	Positional (optional in v3):
-	  out_dir                     Output directory (created if missing). Autopilot sets this if omitted.
-	  sig_map                     Signature program like "4/4(4),5/4(3),6/8(5)". Autopilot picks one if omitted.
-
-	Core:
-          --auto                      Force Autopilot (random banks).
-          --dry-run                   Print planned sources/measures and exit.
-	  --bpm FLOAT                 Global BPM (Autopilot picks a sane range per preset).
-	  --seed STR                  Deterministic seed.
-          --salt STR                  Additional salt to create alternate takes deterministically.
-          --num-sounds INT|A-B        Total slices or range to distribute (default random 15-30).
-          --query-bias STR            IA search bias (Autopilot selects one).
-          --num-sources INT           [Deprecated] Number of IA sources to pull (default 6).
-          --license-allow STR         Comma list of allowed licenses (tokens matched in license URL).
-	  --strict-license            Enforce allow-list strictly (no fallback).
-	  --cache-dir PATH            Download cache (~/.beatsmith/cache default).
-	  --min-rms FLOAT             Audible threshold for slices (default 0.02).
-	  --crossfade FLOAT           Crossfade seconds between measures (default ~0.02; Autopilot varies).
-	  --tempo-fit {off,loose,strict}  Fit each slice to the exact measure duration.
-	  --stems                     Write stems per bus/measure.
-	  --microfill                 Add subtle end-of-measure sparkle on texture bus.
-	  --preset {boom-bap,edm,lofi}
-	  --verbose                   Debug logs.
-
-	Build-on:
-	  --build-on PATH             Mix underneath an existing base track.
-	  --sidechain FLOAT           Duck new beat against base (0..1).
-	  --sidechain-lookahead-ms FLOAT  Lookahead for sidechain envelope.
-
-        FX (per-groove then post-loop, ~20% chance each):
-          --compress                  Per-groove compressor
-          --comp-thresh FLOAT         Threshold dB (default -18)
-          --comp-ratio  FLOAT         Ratio (default 4)
-          --comp-makeup FLOAT         Makeup gain dB (default +2)
-          --eq-low/--eq-mid/--eq-high FLOAT  Per-groove 3-band EQ gains (dB)
-          --reverb-mix FLOAT          Post-loop 0..1 wet mix
-          --reverb-room FLOAT         0..1
-          --tremolo-rate FLOAT        Post-loop Hz
-          --tremolo-depth FLOAT       0..1
-          --force-reverb              Autopilot: always include reverb
-          --force-tremolo             Autopilot: always include tremolo
-          --phaser-rate FLOAT         Hz (0 disables)
-          --phaser-depth FLOAT        0..1
-          --echo-ms FLOAT             ms (0 disables)
-	  --echo-fb FLOAT             0..1 feedback
-	  --echo-mix FLOAT            0..1 wet mix
+## What v4 Does (Pipeline)
+1) **Acquire** audio from Internet Archive with license filtering + deterministic sampling.
+2) **Decode** to 44.1 kHz internal SR, preserving stereo when available.
+3) **Extract** one-shot / loop / long-form segments (no time-stretching).
+4) **Trim** silence naturally with pad ms; apply tiny fades.
+5) **Normalize** (peak or RMS) to consistent loudness with safety ceiling.
+6) **Export** clean stereo + mono WAVs (44.1 kHz / 16-bit PCM).
+7) **Optionally apply FX** and export variants to a separate folder.
+8) **Log provenance** in `pack.json` and optional SQLite DB.
 
 ---
 
-## How it Works (Pipeline)
-	1) Query Internet Archive Advanced Search (audio mediatype), bias by preset/query term, filter licenses.
-	2) For each picked file:
-	   - Decode to mono @ 44.1kHz (librosa/audioread).
-	   - Compute metrics: onset density, ZCR, spectral flatness → classify as percussive vs texture.
-	3) Build the measure timeline from your signature map (e.g., 4/4(4),5/4(3),6/8(5)).
-	4) For each measure & bus:
-	   - Choose a source of that bus (weighted randomly).
-	   - Pick an onset-aligned, sufficiently audible window.
-	   - Time-stretch to measure duration (off/loose/strict).
-	   - (Optional) micro-fill at tail for texture.
-	5) Crossfade-concat measures per bus, balance buses, optional base mix & sidechain.
-        6) FX: per-groove compressor → EQ (each gated ~20%), loop to length, then one pass of optional reverb/tremolo/phaser/echo (each ~20% chance); normalize, write WAV.
-	7) Log everything to SQLite: runs, sources, per-measure segments & parameters.
+## Output Layout (MPC-friendly)
+```
+OUT_DIR/
+  pack.json                 # full manifest (provenance + processing)
+  credits.csv               # IA attribution + license URL + retrieval date
+  README_PACK.txt           # quick usage + attribution guidance
+  samples/
+    clean/
+      oneshot/
+        stereo/*.wav
+        mono/*.wav
+      loop/
+        stereo/*.wav
+        mono/*.wav
+      longform/
+        stereo/*.wav
+        mono/*.wav
+    fx/
+      <fxchain_tag>/         # e.g., “rvb_eq”, “comp_sat”, “echo_mod”
+        oneshot/stereo/*.wav
+        oneshot/mono/*.wav
+        loop/stereo/*.wav
+        loop/mono/*.wav
+        longform/stereo/*.wav
+        longform/mono/*.wav
+  metadata/
+    waveforms/              # optional PNG waveform renders
+    previews/               # optional short MP3 previews
+  db/
+    samplesmith_v4.db       # sqlite (optional)
+```
 
 ---
 
-## Data & Reproducibility
-	- Deterministic seeding: same (seed, salt, CLI) → same result.
-	- Provenance: beatsmith_v3.db records sources (URLs, license URLs), selected segments, and parameters per run.
-	- Caching: downloads are content-addressed by URL hash under ~/.beatsmith/cache by default.
+## Filename Conventions
+Clean sample naming:
+
+```
+<formPrefix>_<srcTag>_<durMs>ms_<grp>_<bpmTag>_<seedTag>_<id>.wav
+```
+
+- `formPrefix`: `os` (one-shot), `lp` (loop), `lf` (long-form)
+- `srcTag`: short hash of IA identifier + file name
+- `durMs`: post-trim duration (ms)
+- `grp`: nearest bucket (t2/six/e/q/h/w/b2/b4/...) or `free`
+- `bpmTag`: `bpm120a` (assumed) or `bpm128i` (inferred if enabled)
+- `seedTag`: `s<seedShort>` (with optional salt)
+- `id`: unique short uuid
+
+FX variants add a suffix:
+
+```
+...__fx-rvb_eq.wav
+```
+
+Stereo/mono are indicated by folder path to keep filenames short.
 
 ---
 
-## Extensibility Notes (for contributors)
-The codebase is laid out to make it easy to add sources, selectors, FX, and buses:
+## CLI Reference (v4 Harvest)
+Primary command:
 
-	- Source providers: isolate IA calls in a provider layer so we can add others (Freesound*, Wikimedia*, Librivox*, local dirs).
-	- Selection strategies: encapsulate “choose slice start” (onset-aligned, RMS-max, beat-tracked).
-	- Time fitting: current off/loose/strict adapter can grow into a strategy registry (phase-vocoder, WSOLA, rubberband).
-	- FX chain: each FX is a pure function (np.ndarray -> np.ndarray). It’s straightforward to add new modules.
-	- Buses: keep “perc” and “tex” as first-class; support more buses with independent FX and mixing.
-	- SQLite: expand schema with migration guards (PRAGMA user_version).
+    beatsmith harvest [OUT_DIR]
 
-\* Respect service ToS, API keys, and licensing.
+### Core
+- `--seed STR` (deterministic)
+- `--salt STR` (deterministic alternate take)
+- `--cache-dir PATH`
+- `--license-allow CSV`
+- `--strict-license`
+- `--query-bias STR`
+- `--reuse-sources`
+- `--c INT` (default 100) — total IA source files to download/process
+- `--max-samples INT` — hard cap on total exported sample units
+- `--min-rms FLOAT` — audible gating threshold
+- `--dry-run`
+- `--verbose`
 
-See `ROADMAP.md` for concrete plugin/registry plans and task breakdowns.
+### Form selection (randomized per source)
+- `--form-modes CSV` (oneshot, loop, longform; default all)
+- `--form-variation-range A-B` (default 1-3)
+- `--oneshot-seconds A-B` (default 0.08-1.20)
+- `--loop-seconds A-B` (default 1.0-16.0)
+- `--longform-seconds A-B` (default 30-90)
+
+### Trim + normalize
+- `--trim-silence-db FLOAT` (default -45)
+- `--trim-pad-ms INT` (default 12)
+- `--fade-in-ms INT` (default 2)
+- `--fade-out-ms INT` (default 8)
+- `--normalize-mode {peak,rms}` (default peak)
+- `--normalize-peak-db FLOAT` (default -1.0)
+- `--normalize-rms FLOAT` (if rms mode)
+
+### Length labeling (no stretching)
+- `--label-bpm-assumption FLOAT` (default 120.0)
+- `--label-tolerance FLOAT` (default 0.12)
+- `--emit-bpm-infer` (include inferred bpm if confident)
+- `--bpm-confidence-min FLOAT` (default 0.55)
+
+### FX variations
+- `--c-effects INT` (default 0 => all)
+- `--c-effect-randomize-count A-B` (default "0-5"; max 50)
+- `--c-effect-variations` (0 or CSV list: reverb,compression,eq,modulation,echo,phaser,tremolo...)
+- `--fx-prob FLOAT` (default 1.0)
+- `--fx-chain-style {tasteful,aggressive,random}` (default tasteful)
+- `--fx-room {small,mid,large}` (optional)
+- `--fx-tag-filenames` (default true)
+
+### Output
+- `--export-mono` (default true)
+- `--export-stereo` (default true)
+- `--stereo-prefer` (default true; if mono source, stereo export is dual-mono)
+- `--pack-name STR` (default auto `SamplePack_YYYYMMDD_HHMMSS_seed`)
+- `--write-manifest` (default true)
+- `--write-credits` (default true)
+- `--zip-pack` (optional)
+
+---
+
+## Length Grouping (Label Only)
+Quantization is **labeling only**—no time-stretching or duration forcing.
+
+- `sec_per_beat = 60 / bpm_assumption`
+- `beats = duration_seconds / sec_per_beat`
+- Nearest buckets (t2, six, e, q, h, w, b2, b4, …)
+- If outside tolerance, label `free`
+- Long-form always labeled `lf`
+
+---
+
+## Provenance + Compliance
+BeatSmith v4 writes:
+- `pack.json` (manifest): run info, source IDs/URLs/licenses, offsets, processing, exports
+- `credits.csv`: attribution with license URLs + retrieval timestamps
+- Optional SQLite DB with runs/sources/samples/variants/exports
+
+---
+
+## Acceptance Criteria (v4)
+Running:
+
+    beatsmith harvest outdir --seed X --c 10
+
+Must yield:
+- ≤ `max-samples` exported sample units
+- Each unit has **1 stereo WAV + 1 mono WAV**
+- Optional FX variants also in stereo+mono
+- **No time-stretching** used
+- Natural silence trim with pad ms
+- Subtle, consistent fades
+- Filenames include duration ms, grp label, bpm tag, and FX tag if applicable
+- `pack.json` and `credits.csv` present with IA attribution
 
 ---
 
 ## Testing
-        # Install test and lint dependencies
-        pip install -e .[test]
+    # Install test and lint dependencies
+    pip install -e .[test]
 
-        # Run style checks
-        ruff check tests
+    # Run style checks
+    ruff check tests
 
-        # Execute unit tests
-        pytest
-
----
-
-## Licensing & Ethics
-	- BeatSmith is an art/sonification engine. You are responsible for how you use the outputs.
-	- We *prefer* Creative Commons / Public Domain assets and expose a license allow-list.
-	- Always verify source licenses; IA metadata can be incomplete. Use `--strict-license` to fail fast.
-
----
-
-## Troubleshooting
-	- “No backend to decode MP3/OGG”: ensure `ffmpeg` is installed and on PATH.
-	- “No sources available”: loosen `--license-allow` or remove `--strict-license`; try a different `--query-bias`.
-	- “Artifacts with --tempo-fit strict”: try `--tempo-fit loose` (snaps to simple musical ratios).
-	- “Clipping”: the exporter peak-normalizes to ~-0.8dBFS; if you overdrive echo/comp, artifacts can stack. Back off gains or reverbs.
-
----
-
-## Examples
-        # Groovey EDM Autopilot with stems
-        python -m beatsmith --auto --preset edm --stems
-
-        # Tight 7/8 texture piece from ambient sources
-        python -m beatsmith out "7/8(12)" --bpm 126 --preset lofi \
-                --query-bias "ambient texture OR pad" --tempo-fit loose --stems
-
----
-
-## Pattern Oracle (optional)
-BeatSmith can optionally overlay quantized drum patterns sourced from MIDI files.
-
-### Build the pattern database
-        pip install mido
-        python tools/drum_patterns.py ingest <midi_dir>
-
-This creates `~/.beatsmith/patterns.db` by default; pass `--db` to override.
-
-### Enable pattern overlay
-        python -m beatsmith out "4/4(8)" --bpm 120 \\
-                --pattern-enable --pattern-db ~/.beatsmith/patterns.db \\
-                --pattern-sig 4/4 --pattern-lane-map kick=perc,snare=perc
-
-`--pattern-enable` turns on pattern placement. Without `--pattern-db`, BeatSmith
-looks for `~/.beatsmith/patterns.db`. By default all lanes pull from the `perc`
-bus; override with `--pattern-lane-map lane=bus,...`.
-
----
-
-## Maintainer Directions & Preferences (baked into the project)
-	- CLI: argparse only; positional requireds kept minimal; sensible defaults.
-	- Logging: use logging.* only; prefixes "[i] ", "[!]", "[DEBUG]", "[x]" throughout code.
-	- Robustness: defensive error handling around network/decoding; hard caps on download size; cache with fallbacks.
-	- SQLite: always persist run metadata; migrations via PRAGMA user_version in future splits.
-	- No placeholders: any new module should ship **complete, working** code; tests preferred.
-	- Performance: keep algorithms vectorized; only loop when necessary; consider numba/torch optional accels later.
-	- Determinism: all randomness should route through a seedable RNG; log chosen parameters.
-	- Tests: add property tests for envelope, onset picking, crossfade boundaries, and time-stretch invariants.
-
----
-
-## Future: Random/Patterned Stretch-Squish (planned)
-We will add options to *randomly* or via a *pattern* expand/compress slices **during the final mix**, independent of measure-fit:
-
-	--stretch-mix random[:min-max][:prob]        e.g., --stretch-mix random:0.85-1.25:0.3
-	--stretch-mix pattern "<seq>"                e.g., --stretch-mix pattern "1.0,0.92,1.08,1.0"
-	--stretch-mix-scope {bus,global}             Apply per bus or globally
-	--stretch-mix-mode {loose,strict,off}        Which stretcher to use for these mutations
-
-See ROADMAP.md for details.
+    # Execute unit tests
+    pytest
 
 ---
 
 ## License
 MIT (engine). You must still respect third-party audio licenses you fetch and use.
-
----
-
