@@ -26,7 +26,22 @@ After installing dependencies, generate a sample pack:
 
 ---
 
-## Installation
+## Installation (Recommended)
+Run the cross-platform installer for macOS and Linux:
+
+    ./scripts/install.sh
+
+The script will:
+- Install Python (3.10+) and pip via your system package manager (or prompt you if unavailable).
+- Install `ffmpeg`.
+- Create a `.venv` in the repo and install BeatSmith in editable mode.
+
+Once complete:
+
+    source .venv/bin/activate
+    beatsmith --help
+
+### Manual Installation (fallback)
 Python 3.10+ and `ffmpeg` are required. Use a virtual environment to keep dependencies isolated:
 
     # System requirements
