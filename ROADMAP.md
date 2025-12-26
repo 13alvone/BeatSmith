@@ -1,191 +1,228 @@
 # ROADMAP.md
 
-# BeatSmith Roadmap — toward the most open, random, and extensible beat machine
+# BeatSmith Roadmap — deterministic sample pack harvesting (v4+)
 
-This roadmap breaks down near-term hardening, medium-term features (including **random/pattern stretch-squish** and **new FX**), and long-term platform goals (plugins, GUIs, new providers). It’s designed so the project “grows like crazy” without turning into spaghetti.
+BeatSmith’s center of gravity is **v4 (“SampleSmith”)**: harvest audio sources, slice into usable samples, apply trim/fade/normalization, optionally generate FX variants, and export with provenance.
 
-## 0. Current (v3) — Baseline we ship today
-- Autopilot zero-args flow (random signature/preset/BPM/query/FX/stems)
-- Onset-aligned slicing; percussive vs texture buses
-- Tempo fit: off | loose (musical ratios) | strict (exact phase-vocoder)
-- Master FX: compressor, 3-band EQ, reverb, tremolo, phaser, echo
-- Base layering + lookahead sidechain
-- SQLite run/source/segment logs; download cache; license allow-list
-- Deterministic RNG via (seed, salt)
+This roadmap is written to keep the project:
+- deterministic and inspectable,
+- license-aware,
+- practical for real sampling workflows (MPC/DAW),
+- extensible without becoming fragile.
 
 ---
 
-## 1. Near-term hardening (v3.x)
-### 1.1 Stability & UX
-- Add `beatsmith inspect` subcommand:
-	- Print last run’s config from SQLite (replay helper).
-	- Summarize source licenses, durations, and per-measure selections.
-- Add `--dry-run` to resolve sources and print a plan without downloading audio.
-- Add retry/backoff on IA requests; user-agent + courteous pacing.
+## 0. Current (v4) — What we ship today
 
-### 1.2 Slicing/Timing
-- Beat-track alignment option (librosa beat tracker) for sources that are steady-tempo loops.
-- Optional quantize boundary nudges so crossfades land on energy valleys.
+### 0.1 Harvest pipeline (primary workflow)
+- Provider: **Internet Archive** (default)
+- Provider: **Local filesystem** (recursive scan)
+- Deterministic builds: `--seed` (+ optional `--salt`)
+- Slice forms:
+  - `oneshot` (onset-aligned windowing)
+  - `loop` (fixed-length windows)
+  - `longform` (fixed-length windows)
+- Post-processing:
+  - silence trim + pad
+  - fades
+  - normalization (`peak` or `rms`)
+  - safety checks (finite samples; no NaN/Inf)
+- Export:
+  - WAV **44.1kHz / 16-bit PCM**
+  - stereo + mono variants per sample (configurable)
+  - best-effort **0644** permissions on outputs
+- Provenance:
+  - `pack.json` manifest (run options + sample metadata + sources)
+  - `credits.csv` attribution export
+- Optional:
+  - FX variants (tasteful/aggressive/random chain styles)
+  - `--zip-pack`
+- Inspection:
+  - `beatsmith inspect pack.json`
 
-### 1.3 Testing
-- Audio snapshot tests (hash of rendered 10-sec fixtures).
-- Property tests:
-	- Crossfade continuity (no clicks: last N samples + first N samples overlap constraints).
-	- Time-stretch invariants (len, RMS bounds).
-- Fuzz tests for sig_map parser and IA result handling.
-
----
-
-## 2. Stretch-/Squish-During-Mix feature (requested) (v4)
-Introduce secondary, **creative time warping** on top of measure-fit to add motion and swagger.
-
-### 2.1 Spec (CLI)
-- Random:
-	--stretch-mix random[:min-max][:prob]
-	Examples:
-		--stretch-mix random            (defaults: 0.9–1.1, prob 0.25)
-		--stretch-mix random:0.85-1.25:0.35
-
-- Patterned:
-	--stretch-mix pattern "<seq>"
-	Examples:
-		--stretch-mix pattern "1.00,0.92,1.08,1.00"     # bar loop
-		--stretch-mix pattern "rand(0.9,1.1),1.0,1.0"   # allow random tokens
-
-- Scope & mode:
-	--stretch-mix-scope {bus,global}
-	--stretch-mix-mode {loose,strict,off}  # reuse existing fit engines
-
-### 2.2 Engine
-- Implement a **warp lane** applied after per-measure assembly but before master FX.
-- Core algorithm: split into N sub-windows/bar (e.g., 2–8), apply per-window stretch factors, stitch with micro-Xfades.
-- Musical guards: avoid extreme factors back-to-back; maintain overall length within tolerance (±10ms).
-
-### 2.3 Tests & Metrics
-- Ensure final render length tolerance; no DC offset growth; click-free joins.
-- Expose warp decisions in SQLite (new table `warps`).
+### 0.2 Legacy / secondary tooling (v3 remnants)
+- Earlier beat-generation and pattern tooling exists in the repo (e.g., DB + track assembly logic).
+- `tools/drum_patterns.py` exists as a separate MIDI pattern utility.
+- v3 code is not the primary “happy path” and is treated as legacy unless explicitly revived.
 
 ---
 
-## 3. FX Expansion Pack (v4.x)
-New FX modules (pure functions) with consistent parameter naming and sensible defaults:
+## 1. Near-term hardening (v4.1)
 
-- Limiter (lookahead brickwall)
-- Saturation/soft-clip (tanh waveshaper)
-- Bitcrusher/Downsampler
-- Chorus/Flanger (LFO modulated delay)
-- Auto-pan & Stereo widener (MS processing)
-- Convolution reverb (IR loader; license-clean IRs)
-- Transient shaper (attack/sustain envelopes)
-- Multi-band compressor (3 bands, optional upward comp)
+### 1.1 CLI UX and predictability
+- Ensure CLI help is explicit about “default-to-harvest” behavior.
+- Add clearer examples for:
+  - strict licensing
+  - local provider usage (`--provider local --local-root ...`)
+  - deterministic rebuilds (`--seed`/`--salt`)
+- Add a `--print-effective-config` option to dump resolved defaults and derived ranges.
 
-CLI pattern (examples):
-	--sat-drive 4.0
-	--limiter  --limit-thresh -0.1 --limit-lookahead 2.0
-	--chorus-rate 0.8 --chorus-depth 0.5 --chorus-mix 0.35
-All FX are optional; Autopilot may randomly pick tasteful settings.
+### 1.2 Provider robustness
+- Internet Archive:
+  - tighten retry/backoff semantics and telemetry for 429/5xx
+  - improve search query composition controls (add include/exclude keyword flags)
+  - optional per-run “max bytes downloaded” safety cap
+- Local:
+  - add include/exclude glob patterns (e.g., `--include "*.wav" --exclude "*_preview*"`)
+  - optional “follow symlinks” flag (default: off)
+  - optional “max files scanned” guardrail for very large trees
 
----
+### 1.3 Output correctness guarantees
+- Enforce safe write semantics:
+  - write to temp + atomic rename for `pack.json`/`credits.csv`
+  - avoid partial/corrupt artifacts on interruption
+- Add validation pass after harvest:
+  - confirm all manifest paths exist
+  - confirm all WAVs are readable and finite
+  - confirm export sample rate and subtype match expectations
 
-## 4. Source Providers & Data (v5)
-Abstract the “provider” concept (keep IA as default):
+### 1.4 Filename and labeling polish
+- Optional filename token standardization:
+  - keep current short bucket codes (`q`, `e`, `six`, etc.)
+  - optionally support explicit tokens (e.g., `q=quarter`) behind a flag
+- Add a `--pack-slug` option (normalized folder/zip naming) separate from `--pack-name`.
 
-- Providers:
-	- Internet Archive (current)
-	- Local folder (user’s sample pack)
-	- Librivox (spoken word textures)
-	- Wikimedia Commons (CC audio)
-	- Freesound (requires key; obey ToS)
-- Provider API:
-	- search(query) → list[Asset]
-	- fetch(asset) → audio bytes
-	- license(asset) → normalized enum
-- Provider selection and fallback strategy; per-provider rate caps & polite delays.
-
----
-
-## 5. Plugin/Registry Architecture (v5.x)
-Split into modules and registries so contributors can drop-in new algorithms without editing core:
-
-- Registries:
-	- `SliceStrategy`: onset, beat-track, RMS-max, spectral-novelty
-	- `TimeFit`: off, loose, strict, rubberband (optional)
-	- `FX`: map of name → callable with metadata (params schema, default ranges)
-	- `Bus`: definitions with per-bus FX chains and balance defaults
-	- `Provider`: IA/local/WMC/etc.
-
-- Configuration:
-	- Keep argparse for CLI.
-	- Allow optional YAML scene file (`--scene path.yml`) to define complex chains, signatures, and automation.
-	- SQLite migrations via `user_version`; schema defs live in `db/schema.sql`.
-
-- Packaging:
-	- Publish as `beatsmith` Python package with console scripts: `beatsmith`, `beatsmith-inspect`.
+### 1.5 Logging and debuggability
+- Add structured run summary at end:
+  - sources processed
+  - candidates skipped (low RMS, decode failures, etc.)
+  - exports count by mode (oneshot/loop/longform)
+  - FX variants generated
+- Add `--log-json` option for machine-readable logs (CI / pipelines).
 
 ---
 
-## 6. Performance & Quality (v6)
-- Parallel fetching/decoding with bounded executors.
-- Optional numba acceleration for envelopes and crossfades.
-- Streaming rendering to avoid double buffers on long pieces.
-- Psychoacoustic loudness normalization (ITU-R BS.1770) before limiter.
-- Noise-shaped dither on 16-bit export (when limiter present).
+## 2. Quality and curation upgrades (v4.2)
+
+### 2.1 Better slicing decisions (without time-stretching)
+BeatSmith intentionally does **not** stretch audio to “fit a grid.” Improvements here are about selecting *better windows*, not warping time.
+
+- Smarter onset window selection:
+  - multi-onset fallback windows
+  - transient “density” heuristic to avoid dead air or overly busy segments
+- Loop boundary smoothing:
+  - optional zero-crossing alignment
+  - optional short crossfade at boundaries for loops
+- Add “minimum transient energy” threshold for oneshots (reduce dull/empty hits).
+
+### 2.2 Normalization and loudness options
+- Add optional LUFS-style loudness normalization (off by default).
+- Add DC offset removal (cheap and beneficial).
+- Add clip detection + gentle limiter option (explicitly opt-in).
+
+### 2.3 Metadata improvements
+- Record more sample-level metadata into `pack.json`:
+  - channel count, peak/RMS per channel
+  - trim amount and post-trim duration
+  - onset timestamp (for oneshots) when available
+- Add a stable sample ID (hash of source + window + options) to improve dedupe and reproducibility.
+
+### 2.4 Artifact indexing
+- Optional “index file” for pack browsing:
+  - a lightweight JSON/CSV listing for DAW import assistants
+  - (future) UI-friendly thumbnails or wave previews (generated offline)
 
 ---
 
-## 7. Creative Intelligence (v7)
-- Groove inference: detect implied kick/snare from percussive bus → derive optional MIDI lane export.
-- Auto-arrangement: high-level A/B/A’ forms from entropy/novelty curves.
-- Style guides: preset packs for drill, amapiano, house, garage, halftime, jungle (without genre lock-in).
-- (Optional) ML seasoning:
-	- Classify percussive vs texture with learned features when available.
-	- CLIP-like embeddings to bias source selection to user prompt.
-	- **Note**: must remain deterministic when seeded; provide offline mode.
+## 3. FX expansion and control (v4.3)
+
+### 3.1 Safer, more musical defaults
+- Add “guardrails” to FX params so outputs remain usable:
+  - reverb wet bounds
+  - echo mix bounds
+  - prevent runaway feedback/decay
+- Add an explicit “FX preset” concept:
+  - `--fx-preset airy` / `--fx-preset grime` / `--fx-preset tape` (examples)
+
+### 3.2 FX pipeline extensibility
+- Standardize FX modules as pure functions with explicit parameter schemas.
+- Add a “dry/wet mix per effect” policy that is consistent across FX types.
+- Add a per-run FX report (counts by FX type and average params).
 
 ---
 
-## 8. Tooling & Collaboration
-- CI: lint (ruff), type check (mypy), unit tests (pytest), minimal audio fixtures.
-- Pre-commit hooks: whitespace, large file guard.
-- Issue templates: bug / feature / provider request.
-- Contribution guide: style (snake_case, logging prefix rules), PR review checklist.
+## 4. Provider expansion (v5)
+
+### 4.1 Additional sources (optional)
+- Add new providers only if they can be:
+  - license-auditable,
+  - stable to operate,
+  - deterministic enough for reproducible builds.
+
+Examples (subject to feasibility):
+- public-domain libraries with structured metadata
+- user-provided URL lists (with explicit allowlist and caching)
+
+### 4.2 Unified provenance model
+- Standardize fields across providers:
+  - stable source identifiers
+  - license metadata and confidence level
+  - retrieval timestamp + retrieval method
 
 ---
 
-## 9. Docs & UX
-- `beatsmith inspect` and `beatsmith plan` (dry-run) docs.
-- Examples gallery with reproducible seeds.
-- Tutorial: how to add a new FX or provider in <100 lines.
-- FAQ: licensing, reproducibility, artifacts.
+## 5. Plugin/registry architecture (v5.x)
+
+Goal: allow new providers / slicers / post-processors / FX packs without modifying core logic.
+
+- Provider plugin interface (search, fetch, metadata)
+- Slicer strategy interface (oneshot/loop/longform could become strategies)
+- Post-processing chain registry (trim/fade/normalize/validate)
+- FX pack registry (preset schemas + parameter ranges)
+- “Pack export targets” registry (future: Ableton/NI/MPC helpers)
 
 ---
 
-## 10. Directions & Preferences (project ethos)
-- **Argparse** interface, transparent defaults; positional requireds kept minimal.
-- **No placeholders** — PRs must include working code and basic tests.
-- **Logging only** (no print); prefix messages: “[i] ” info, “[!] ” warning, “[DEBUG] ” debug, “[x] ” error.
-- **SQLite first** for any run/session data; avoid ad-hoc text/CSV.
-- **Determinism** — every random decision must be seed-driven and recorded.
-- **Extensibility** — isolate algorithms behind registries; keep pure functions for DSP modules.
-- **License hygiene** — default to CC/PD; allow strict enforcement; always store provenance in DB.
+## 6. Performance and reliability (v6)
+
+- Parallelism:
+  - concurrent downloads (IA)
+  - parallel slicing/export (bounded worker pool)
+- Memory efficiency:
+  - stream decode where possible
+  - avoid duplicating large arrays when exporting stereo/mono
+- Caching improvements:
+  - content-addressed cache keys
+  - cache eviction policy (`--cache-max-gb`)
+- CI hardening:
+  - deterministic golden tests with fixed seeds
+  - decode tests that do not depend on network
 
 ---
 
-## Appendix: Proposed DB additions
-- `warps` table (for stretch-mix):
-	- run_id, measure_index, bus, window_index, factor, mode
-- `fx_params` table:
-	- run_id, fx_name, param_json (for exact reconstruction of master chain)
-- `providers` table:
-	- run_id, provider_name, config_json
+## 7. Docs and UX (ongoing)
+
+- “Getting started” walkthrough with:
+  - seed/salt determinism examples
+  - strict licensing examples
+  - local provider examples
+- Add a “Pack Quality Checklist” section to README:
+  - what knobs to turn for more transient hits vs more ambience
+- CONTRIBUTING guidelines:
+  - how to add a provider
+  - how to add an FX module
+  - how to add tests that are stable in CI
 
 ---
 
-## Appendix: Security & Safety
-- Enforce max download size (already in v3).
-- Sanitize file names on disk; never execute remote content.
-- Backoff on HTTP 429; respect robots and service-specific ToS.
-- Provide a “verified license only” switch for production pipelines.
+## 8. Security and safety (non-negotiable)
+
+- Treat all remote content as untrusted:
+  - bounded downloads
+  - bounded decode time
+  - robust exception handling and skip policies
+- File safety:
+  - no directory traversal on outputs
+  - atomic writes for manifests and credits
+- Licensing:
+  - strict mode should remain conservative
+  - provenance should be first-class and difficult to bypass accidentally
 
 ---
+
+## Notes on scope (important)
+
+- BeatSmith does **not** aim to be a DAW, sequencer, or automatic composer in v4+.
+- BeatSmith does **not** time-stretch samples to “fit” musical values. Duration bucketing is a **label**, not a warp.
+- If beat-generation is revived, it should re-enter as a separate, clearly-scoped module/tool so the harvester remains stable.
 

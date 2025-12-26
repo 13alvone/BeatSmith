@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: beatsmith
+Version: 0.1.0
+Summary: Internet Archive powered stochastic beat builder
+Requires-Python: >=3.10
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: librosa
+Requires-Dist: soundfile
+Requires-Dist: requests
+Requires-Dist: mido
+Provides-Extra: test
+Requires-Dist: pytest; extra == "test"
+Requires-Dist: ruff; extra == "test"
+Requires-Dist: hypothesis; extra == "test"

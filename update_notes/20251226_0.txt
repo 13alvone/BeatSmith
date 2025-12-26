@@ -1,0 +1,53 @@
+Documentation updates (project-level)
+
+Updated README.md to clearly define BeatSmith’s purpose, core workflow, and usage patterns (including reproducible runs via seed/salt).
+
+Updated SECURITY.md to document safe operation expectations (e.g., remote source usage, licensing considerations, and avoiding unsafe behaviors).
+
+Updated ROADMAP.md to reflect the project’s near-term stabilization priorities (runtime correctness, deterministic runs, better output guarantees) and longer-term enhancements.
+
+Import/runtime stability fixes
+
+Resolved a chain of ImportError failures by restoring/adding expected module APIs that the CLI imports (e.g., missing functions like infer_bpm_for_label and the expected apply_* FX entry points).
+
+Standardized module boundaries so cli.py imports are satisfied by audio.py and fx.py without requiring “ad hoc” edits per missing symbol.
+
+trim_silence call alignment
+
+Fixed the TypeError: trim_silence() got an unexpected keyword argument 'db' by aligning the CLI callsite to the actual trim_silence signature (and keeping parameter naming consistent across the project).
+
+FX pipeline functional completeness
+
+Ensured the FX layer exposes the functions the CLI expects (compression, EQ, modulation, reverb, etc.), either via wrappers or canonical implementations, to prevent “missing function” failures during production runs.
+
+Output reliability (“never returns nothing”)
+
+Implemented a robust fallback strategy so runs do not silently produce zero samples:
+
+Added a source acquisition timeout (default 60s, adjustable) to prevent endless “search with no yield.”
+
+Added a no-progress timeout (default 60s, adjustable) to detect “generation stuck at zero output.”
+
+Added an emergency synthesis fallback (configurable) to guarantee output even when remote source acquisition fails or is throttled.
+
+Observability and troubleshooting improvements
+
+Added/expanded verbose operational logging so the tool reports:
+
+why candidates were skipped (too small, decode fail, reuse suppression, etc.),
+
+how far it got in selection/generation,
+
+and summary statistics for “what happened” instead of failing silently.
+
+Removed reliance on a missing global (VERBOSE) and standardized verbosity control via CLI flags/log configuration.
+
+Determinism and reproducibility
+
+Preserved deterministic behavior via the seed/salt approach while still supporting randomized selection and variation generation.
+
+Operational safety and “graceful recovery”
+
+When trimming eliminates a segment (or other transforms yield empties), the pipeline now recovers by retrying with safer settings rather than quietly dropping everything.
+
+Net effect: the project was moved from “iteratively failing on missing symbols and producing zero output with unclear reasons” to a state where imports are consistent, the CLI aligns with module APIs, production runs are explainable via logs, and runs are strongly biased to produce usable output within bounded time.

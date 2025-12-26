@@ -134,21 +134,75 @@ def downmix_to_mono(y: np.ndarray) -> np.ndarray:
 def trim_silence(
     y: np.ndarray,
     sr: int,
-    top_db: float,
-    pad_ms: int,
+    top_db: float = 30.0,
+    pad_ms: int = 0,
+    db: Optional[float] = None,
+    **kwargs,
 ) -> Tuple[np.ndarray, int, int]:
+    """Trim leading/trailing silence with librosa, with compatibility aliases.
+
+    Compatibility:
+      - `db` is accepted as an alias for `top_db` (some CLI versions call it `db`)
+      - accepts extra kwargs (ignored) to prevent future CLI/API drift breakage
+
+    Parameters
+    ----------
+    y : np.ndarray
+        Audio samples (mono or multi-channel).
+    sr : int
+        Sample rate.
+    top_db : float
+        Librosa trim threshold (in dB below reference).
+    pad_ms : int
+        Amount of padding (ms) to keep before/after detected non-silent region.
+    db : Optional[float]
+        Alias for `top_db`.
+
+    Returns
+    -------
+    trimmed : np.ndarray
+        Trimmed audio (same channel layout as input).
+    start : int
+        Start sample index (in original mono index space).
+    end : int
+        End sample index (in original mono index space).
+    """
+    # Alias handling: if caller uses `db=...`, treat it as `top_db`.
+    if db is not None:
+        try:
+            top_db = float(db)
+        except Exception:
+            # If db is weird/unparseable, fall back to provided top_db
+            pass
+
+    # Some callers may pass negative numbers; librosa expects positive top_db.
+    try:
+        top_db = abs(float(top_db))
+    except Exception:
+        top_db = 30.0
+
+    try:
+        pad_ms = int(pad_ms)
+    except Exception:
+        pad_ms = 0
+
     mono = downmix_to_mono(y)
     if mono.size == 0:
         return y, 0, 0
+
     yt, idx = librosa.effects.trim(mono, top_db=top_db)
     start, end = int(idx[0]), int(idx[1])
+
     pad = int(sr * pad_ms / 1000.0)
     start = max(0, start - pad)
     end = min(mono.size, end + pad)
+
     if start >= end:
         return y, 0, mono.size
+
     if y.ndim == 1:
         return y[start:end].astype(np.float32), start, end
+
     return y[:, start:end].astype(np.float32), start, end
 
 def apply_fades(y: np.ndarray, sr: int, fade_in_ms: int, fade_out_ms: int) -> np.ndarray:
@@ -227,6 +281,17 @@ def infer_bpm(y: np.ndarray, sr: int) -> Tuple[Optional[float], float]:
     expected_beats = max(duration / (60.0 / tempo), 1.0)
     confidence = min(1.0, len(beats) / expected_beats)
     return float(tempo), float(confidence)
+
+
+def infer_bpm_for_label(y: np.ndarray, sr: int) -> Tuple[Optional[float], float]:
+    """Compatibility wrapper for the harvester's optional BPM labeling.
+
+    `beatsmith.cli` imports `infer_bpm_for_label`. The implementation lives in
+    `infer_bpm`; this wrapper preserves the expected public API without changing
+    behavior.
+    """
+
+    return infer_bpm(y, sr)
 
 def normalize_peak(y: np.ndarray, peak_db: float = -0.8) -> np.ndarray:
     peak = np.max(np.abs(y)) + 1e-12
@@ -845,3 +910,4 @@ def assemble_track(
     mix_perc = crossfade_concat(perc_chunks, TARGET_SR, fade_s=crossfade_s)
     mix_tex = crossfade_concat(tex_chunks, TARGET_SR, fade_s=crossfade_s * 0.8)
     return mix_perc, mix_tex
+

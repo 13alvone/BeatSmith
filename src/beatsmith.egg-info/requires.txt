@@ -1,0 +1,11 @@
+numpy
+scipy
+librosa
+soundfile
+requests
+mido
+
+[test]
+pytest
+ruff
+hypothesis
