@@ -3,6 +3,7 @@ import csv
 import hashlib
 import json
 import logging
+import math
 import os
 import sys
 import time
@@ -50,6 +51,18 @@ FX_TYPES = {
     "phaser": "phaser",
     "tremolo": "trem",
 }
+
+ONESHOT_BUCKET_BEATS = {
+    "w": 4.0,
+    "h": 2.0,
+    "q": 1.0,
+    "e": 0.5,
+    "six": 0.25,
+    "t32": 0.125,
+}
+ONESHOT_BUCKET_ORDER = ("w", "h", "q", "e", "six", "t32")
+
+OUTPUT_MODES = ("stereo", "mono", "stereo_mono")
 
 
 @dataclass
@@ -147,6 +160,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--oneshot-seconds", type=str, default="0.08-1.20")
     p.add_argument("--loop-seconds", type=str, default="1.0-16.0")
     p.add_argument("--longform-seconds", type=str, default="30-90")
+    p.add_argument("--longform-max-ratio", type=float, default=0.25)
+    p.add_argument("--oneshot-weight", type=float, default=1.0)
+    p.add_argument("--loop-weight", type=float, default=0.35)
+    p.add_argument("--longform-weight", type=float, default=0.15)
 
     p.add_argument("--trim-silence-db", type=float, default=-45.0)
     p.add_argument("--trim-pad-ms", type=int, default=12)
@@ -160,6 +177,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--label-tolerance", type=float, default=0.12)
     p.add_argument("--emit-bpm-infer", action="store_true")
     p.add_argument("--bpm-confidence-min", type=float, default=0.55)
+    p.add_argument("--oneshot-full-range", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--oneshot-range-min-per-bucket", type=int, default=1)
 
     p.add_argument("--c-effects", type=int, default=0)
     p.add_argument("--c-effect-randomize-count", type=str, default="0-5")
@@ -168,10 +187,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fx-chain-style", choices=["tasteful", "aggressive", "random"], default="tasteful")
     p.add_argument("--fx-room", choices=["small", "mid", "large"], default=None)
     p.add_argument("--fx-tag-filenames", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--oneshot-fx-per-sample", type=int, default=1)
 
     p.add_argument("--export-mono", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--export-stereo", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--stereo-prefer", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--output-mode", choices=OUTPUT_MODES, default="stereo")
+    output_group = p.add_mutually_exclusive_group()
+    output_group.add_argument("--mono", action="store_true", help="Export only mono outputs.")
+    output_group.add_argument("--stereo", action="store_true", help="Export only stereo outputs.")
+    output_group.add_argument("--stereo_mono", action="store_true", help="Export both stereo and mono outputs.")
     p.add_argument("--pack-name", type=str, default=None)
     p.add_argument("--write-manifest", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--write-credits", action=argparse.BooleanOptionalAction, default=True)
@@ -179,6 +204,115 @@ def build_parser() -> argparse.ArgumentParser:
 
     p.add_argument("--provider", choices=["ia", "local"], default="ia")
     return p
+
+
+def _resolve_output_mode(args, argv_tokens: Sequence[str]) -> Tuple[str, bool]:
+    explicit_output = any(flag in argv_tokens for flag in ("--output-mode", "--mono", "--stereo", "--stereo_mono"))
+    legacy_output = any(
+        flag in argv_tokens
+        for flag in (
+            "--export-mono",
+            "--no-export-mono",
+            "--export-stereo",
+            "--no-export-stereo",
+            "--stereo-prefer",
+            "--no-stereo-prefer",
+        )
+    )
+
+    output_mode = args.output_mode
+    if args.mono:
+        output_mode = "mono"
+    elif args.stereo:
+        output_mode = "stereo"
+    elif args.stereo_mono:
+        output_mode = "stereo_mono"
+
+    if not explicit_output and legacy_output:
+        if args.export_mono and args.export_stereo:
+            output_mode = "stereo_mono"
+        elif args.export_stereo and not args.export_mono:
+            output_mode = "stereo"
+        elif args.export_mono and not args.export_stereo:
+            output_mode = "mono"
+        else:
+            lw("Legacy export flags disabled both mono and stereo; defaulting to stereo output.")
+            output_mode = "stereo"
+        lw("Legacy output flags are deprecated; use --output-mode or --mono/--stereo/--stereo_mono.")
+
+    if output_mode not in OUTPUT_MODES:
+        output_mode = "stereo"
+
+    allow_upmix = bool(args.stereo_prefer)
+    if legacy_output and "--no-stereo-prefer" in argv_tokens:
+        allow_upmix = False
+
+    args.output_mode = output_mode
+    args.export_mono = output_mode in ("mono", "stereo_mono")
+    args.export_stereo = output_mode in ("stereo", "stereo_mono")
+    args.stereo_prefer = allow_upmix
+    return output_mode, allow_upmix
+
+
+def _compute_form_targets(
+    total_budget: int,
+    oneshot_weight: float,
+    loop_weight: float,
+    longform_weight: float,
+    longform_max_ratio: float,
+) -> Dict[str, int]:
+    total_budget = max(int(total_budget), 0)
+    weights = {
+        "oneshot": max(0.0, oneshot_weight),
+        "oneshot_fx": max(0.0, loop_weight),
+        "longform": max(0.0, longform_weight),
+    }
+    weight_sum = sum(weights.values())
+    if weight_sum <= 0:
+        weights["oneshot"] = 1.0
+        weight_sum = 1.0
+
+    oneshot_target = int(round(total_budget * weights["oneshot"] / weight_sum))
+    oneshot_fx_target = int(round(total_budget * weights["oneshot_fx"] / weight_sum))
+    longform_target = int(round(total_budget * weights["longform"] / weight_sum))
+
+    remainder = total_budget - (oneshot_target + oneshot_fx_target + longform_target)
+    if remainder != 0:
+        oneshot_target += remainder
+
+    longform_cap = int(math.floor(oneshot_target * max(longform_max_ratio, 0.0)))
+    if longform_target > longform_cap:
+        excess = longform_target - longform_cap
+        longform_target = longform_cap
+        oneshot_fx_target += excess
+
+    if oneshot_target <= max(oneshot_fx_target, longform_target):
+        needed = max(oneshot_fx_target, longform_target) - oneshot_target + 1
+        take_from_fx = min(oneshot_fx_target, needed)
+        oneshot_fx_target -= take_from_fx
+        oneshot_target += take_from_fx
+        needed -= take_from_fx
+        if needed > 0:
+            take_from_long = min(longform_target, needed)
+            longform_target -= take_from_long
+            oneshot_target += take_from_long
+
+    current = oneshot_target + oneshot_fx_target + longform_target
+    if current < total_budget:
+        oneshot_target += total_budget - current
+    elif current > total_budget:
+        overflow = current - total_budget
+        reduce_fx = min(oneshot_fx_target, overflow)
+        oneshot_fx_target -= reduce_fx
+        overflow -= reduce_fx
+        if overflow > 0:
+            oneshot_target = max(0, oneshot_target - overflow)
+
+    return {
+        "oneshot": max(0, oneshot_target),
+        "oneshot_fx": max(0, oneshot_fx_target),
+        "longform": max(0, longform_target),
+    }
 
 
 def _fx_params(style: str, rng, room: Optional[str]) -> Dict[str, Dict[str, float]]:
@@ -465,7 +599,8 @@ def select_sources(
 
 
 def main(argv: Optional[List[str]] = None) -> None:
-    args = build_parser().parse_args(argv)
+    argv_tokens = argv if argv is not None else sys.argv[1:]
+    args = build_parser().parse_args(argv_tokens)
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
@@ -484,6 +619,15 @@ def main(argv: Optional[List[str]] = None) -> None:
     if not form_modes:
         form_modes = ["oneshot", "loop", "longform"]
 
+    normalized_forms: List[str] = []
+    for form in form_modes:
+        key = form.strip().lower()
+        if key == "loop":
+            lw("Form mode 'loop' is deprecated and now maps to 'oneshot_fx'. Use 'oneshot_fx' explicitly.")
+            key = "oneshot_fx"
+        normalized_forms.append(key)
+    form_modes = normalized_forms
+
     form_var_min, form_var_max = parse_range(args.form_variation_range, kind="int")
     oneshot_min, oneshot_max = parse_range(args.oneshot_seconds)
     loop_min, loop_max = parse_range(args.loop_seconds)
@@ -491,6 +635,8 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if args.max_samples is None:
         args.max_samples = int(args.c * max(1.0, form_var_max))
+
+    output_mode, allow_upmix = _resolve_output_mode(args, argv_tokens)
 
     allow_tokens = [t.strip() for t in (args.license_allow or "").split(",") if t.strip()]
     strict = bool(args.strict_license)
@@ -519,9 +665,18 @@ def main(argv: Optional[List[str]] = None) -> None:
     ensure_dir(fx_root)
     ensure_dir(meta_root)
 
-    for form in ("oneshot", "loop", "longform"):
+    clean_forms = [f for f in ("oneshot", "longform") if f in form_modes]
+    if not clean_forms:
+        clean_forms = ["oneshot", "longform"]
+        form_modes = list(set(form_modes + clean_forms))
+
+    for form in clean_forms:
         ensure_dir(os.path.join(clean_root, form, "stereo"))
         ensure_dir(os.path.join(clean_root, form, "mono"))
+
+    oneshot_fx_root = os.path.join(fx_root, "oneshot_fx")
+    ensure_dir(os.path.join(oneshot_fx_root, "stereo"))
+    ensure_dir(os.path.join(oneshot_fx_root, "mono"))
 
     li(f"Harvesting {args.c} sources into {pack_name}")
 
@@ -580,6 +735,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     seed_tag = f"s{short_hash(seed + (args.salt or ''))}"
     clean_samples: List[Dict[str, Any]] = []
+    oneshot_bucket_counts = {bucket: 0 for bucket in ONESHOT_BUCKET_ORDER}
 
     skip_stats = {
         "trim_empty": 0,
@@ -611,6 +767,48 @@ def main(argv: Optional[List[str]] = None) -> None:
             f"elapsed={time.monotonic() - gen_start_t:.1f}s"
         )
 
+    form_targets = _compute_form_targets(
+        args.max_samples,
+        args.oneshot_weight,
+        args.loop_weight,
+        args.longform_weight,
+        args.longform_max_ratio,
+    )
+    oneshot_fx_target = form_targets["oneshot_fx"]
+    if "oneshot_fx" not in form_modes:
+        form_targets["oneshot"] += oneshot_fx_target
+        oneshot_fx_target = 0
+
+    clean_targets = {
+        "oneshot": form_targets["oneshot"] if "oneshot" in form_modes else 0,
+        "longform": form_targets["longform"] if "longform" in form_modes else 0,
+    }
+    if "longform" not in form_modes:
+        clean_targets["oneshot"] += clean_targets["longform"]
+        clean_targets["longform"] = 0
+    clean_target_total = sum(clean_targets.values())
+    if clean_target_total <= 0:
+        clean_targets = {"oneshot": max(1, args.max_samples), "longform": 0}
+        clean_target_total = sum(clean_targets.values())
+
+    def _pick_form(form_remaining: Dict[str, int]) -> Optional[str]:
+        options = [form for form, remaining in form_remaining.items() if remaining > 0]
+        if not options:
+            return None
+        return rng.choice(options)
+
+    def _pick_oneshot_bucket() -> Optional[str]:
+        if not args.oneshot_full_range:
+            return None
+        needed = [
+            bucket
+            for bucket in ONESHOT_BUCKET_ORDER
+            if oneshot_bucket_counts.get(bucket, 0) < int(args.oneshot_range_min_per_bucket)
+        ]
+        if needed:
+            return rng.choice(needed)
+        return rng.choice(list(ONESHOT_BUCKET_ORDER))
+
     def _attempt_generate(relaxed: bool = False) -> None:
         nonlocal last_export_t
 
@@ -627,12 +825,12 @@ def main(argv: Optional[List[str]] = None) -> None:
             li(f"Fallback mode enabled: min_rms={min_rms}, trim_db={trim_db}")
 
         for src_idx, src in enumerate(sources, 1):
-            if len(clean_samples) >= int(args.max_samples):
+            if len(clean_samples) >= int(clean_target_total):
                 break
 
             variations = rng.randint(int(form_var_min), int(form_var_max))
             for _ in range(variations):
-                if len(clean_samples) >= int(args.max_samples):
+                if len(clean_samples) >= int(clean_target_total):
                     break
 
                 if _should_trigger_no_progress():
@@ -642,10 +840,19 @@ def main(argv: Optional[List[str]] = None) -> None:
                     return
 
                 skip_stats["attempts"] += 1
-                form = rng.choice(form_modes)
+                form = _pick_form(clean_targets)
+                if form is None:
+                    return
 
+                target_bucket = None
                 if form == "oneshot":
-                    dur_s = rng.uniform(oneshot_min, oneshot_max)
+                    target_bucket = _pick_oneshot_bucket()
+                    if target_bucket:
+                        beats = ONESHOT_BUCKET_BEATS[target_bucket]
+                        sec_per_beat = 60.0 / max(float(args.label_bpm_assumption), 1e-6)
+                        dur_s = beats * sec_per_beat
+                    else:
+                        dur_s = rng.uniform(oneshot_min, oneshot_max)
                     s0, s1, _energy = pick_onset_aligned_window(
                         downmix_to_mono(src.audio),
                         src.sr,
@@ -654,9 +861,6 @@ def main(argv: Optional[List[str]] = None) -> None:
                         min_rms=min_rms,
                         refine_edges=True,
                     )
-                elif form == "loop":
-                    dur_s = rng.uniform(loop_min, loop_max)
-                    s0, s1 = pick_window(src.audio, src.sr, dur_s, rng)
                 else:
                     dur_s = rng.uniform(long_min, long_max)
                     s0, s1 = pick_window(src.audio, src.sr, dur_s, rng)
@@ -697,17 +901,25 @@ def main(argv: Optional[List[str]] = None) -> None:
                     continue
 
                 duration_s = float(seg.shape[-1] / src.sr)
-                bucket = duration_bucket(
-                    duration_s,
-                    float(args.label_bpm_assumption),
-                    float(args.label_tolerance),
-                    longform=(form == "longform"),
-                )
+                if form == "oneshot" and args.oneshot_full_range:
+                    bucket = target_bucket or duration_bucket(
+                        duration_s,
+                        float(args.label_bpm_assumption),
+                        float(args.label_tolerance),
+                        longform=False,
+                    )
+                else:
+                    bucket = duration_bucket(
+                        duration_s,
+                        float(args.label_bpm_assumption),
+                        float(args.label_tolerance),
+                        longform=(form == "longform"),
+                    )
 
                 bpm_tag = f"bpm{int(args.label_bpm_assumption)}a"
                 bpm_val = None
                 bpm_conf = 0.0
-                if args.emit_bpm_infer and form in ("loop", "longform"):
+                if args.emit_bpm_infer and form in ("longform",):
                     bpm_val, bpm_conf = infer_bpm(mono, src.sr)
                     if bpm_val and bpm_conf >= float(args.bpm_confidence_min):
                         bpm_tag = f"bpm{int(round(bpm_val))}i"
@@ -716,15 +928,18 @@ def main(argv: Optional[List[str]] = None) -> None:
 
                 src_tag = short_hash(f"{src.identifier}:{src.filename}")
                 dur_ms = int(round(duration_s * 1000))
-                form_prefix = {"oneshot": "os", "loop": "lp", "longform": "lf"}[form]
+                form_prefix = {"oneshot": "os", "longform": "lf"}[form]
                 uid = uuid.uuid4().hex[:8]
                 filename = f"{form_prefix}_{src_tag}_{dur_ms}ms_{bucket}_{bpm_tag}_{seed_tag}_{uid}.wav"
 
                 exports: Dict[str, str] = {}
                 if args.export_stereo:
                     stereo = seg
-                    if stereo.shape[0] == 1 and args.stereo_prefer:
-                        stereo = np.repeat(stereo, 2, axis=0)
+                    if stereo.shape[0] == 1 and allow_upmix:
+                        shift = rng.randint(0, 128)
+                        left = stereo[0]
+                        right = np.roll(left, shift).astype(np.float32)
+                        stereo = np.vstack([left, right]).astype(np.float32)
                     stereo_path = os.path.join(clean_root, form, "stereo", filename)
                     write_audio(stereo_path, stereo, src.sr)
                     exports["stereo"] = os.path.relpath(stereo_path, out_dir)
@@ -754,6 +969,8 @@ def main(argv: Optional[List[str]] = None) -> None:
 
                 manifest["samples"].append(sample_entry)
                 clean_samples.append({"entry": sample_entry, "audio": seg})
+                if form == "oneshot" and bucket in oneshot_bucket_counts:
+                    oneshot_bucket_counts[bucket] += 1
 
                 skip_stats["exported"] += 1
                 last_export_t = time.monotonic()
@@ -761,7 +978,8 @@ def main(argv: Optional[List[str]] = None) -> None:
                     li(f"Exported {skip_stats['exported']} samples so far (elapsed {time.monotonic() - gen_start_t:.1f}s)")
                 _log_gen_progress()
 
-                if len(clean_samples) >= int(args.max_samples):
+                clean_targets[form] -= 1
+                if len(clean_samples) >= int(clean_target_total):
                     break
 
     _attempt_generate(relaxed=False)
@@ -792,22 +1010,28 @@ def main(argv: Optional[List[str]] = None) -> None:
         )
         sys.exit(2)
 
-    # FX generation section (unchanged from your baseline, but keeps safe_audio)
-    fx_pool = clean_samples
+    # FX generation section (one-shot FX variants)
+    oneshot_samples = [s for s in clean_samples if s["entry"]["form"] == "oneshot"]
+    fx_pool = oneshot_samples
     if args.c_effects > 0:
-        fx_pool = rng.sample(clean_samples, min(args.c_effects, len(clean_samples)))
+        fx_pool = rng.sample(oneshot_samples, min(args.c_effects, len(oneshot_samples)))
 
     fx_variations = parse_csv(args.c_effect_variations)
     fx_types = list(FX_TYPES.keys()) if args.c_effect_variations == "0" else fx_variations
     fx_range_min, fx_range_max = parse_range(args.c_effect_randomize_count, kind="int")
+    fx_total = 0
 
-    for sample in fx_pool:
-        if rng.random() > float(args.fx_prob):
-            continue
-        count = rng.randint(int(fx_range_min), int(fx_range_max))
-        if count <= 0:
-            continue
-        for _ in range(count):
+    if oneshot_fx_target > 0 and fx_pool:
+        for sample in fx_pool:
+            if rng.random() > float(args.fx_prob):
+                continue
+            count = rng.randint(int(fx_range_min), int(fx_range_max))
+            count = min(count, int(args.oneshot_fx_per_sample))
+            if count <= 0:
+                continue
+            for _ in range(count):
+                if oneshot_fx_target and fx_total >= oneshot_fx_target:
+                    break
             chain_len = rng.randint(1, min(3, len(fx_types)))
             chain = rng.sample(fx_types, chain_len)
             params = _fx_params(args.fx_chain_style, rng, args.fx_room)
@@ -822,23 +1046,25 @@ def main(argv: Optional[List[str]] = None) -> None:
             base_any = base_exports.get("stereo") or base_exports.get("mono") or "unknown.wav"
             base_name = os.path.splitext(os.path.basename(base_any))[0]
             fx_tag = "_".join(FX_TYPES.get(x, x) for x in chain) if args.fx_tag_filenames else "fx"
-            fx_name = f"{base_name}_{fx_tag}_{uuid.uuid4().hex[:6]}.wav"
+            fx_name = f"{base_name}_fx_{fx_tag}_{uuid.uuid4().hex[:6]}.wav"
 
             exports: Dict[str, str] = {}
             if args.export_stereo:
                 stereo = fx_out
                 if stereo.ndim == 1:
-                    stereo = np.vstack([stereo, stereo])
-                fx_path = os.path.join(fx_root, form, "stereo")
-                ensure_dir(fx_path)
-                out_path = os.path.join(fx_path, fx_name)
+                    if allow_upmix:
+                        shift = rng.randint(0, 128)
+                        left = stereo
+                        right = np.roll(stereo, shift).astype(np.float32)
+                        stereo = np.vstack([left, right]).astype(np.float32)
+                    else:
+                        stereo = np.vstack([stereo, stereo])
+                out_path = os.path.join(oneshot_fx_root, "stereo", fx_name)
                 write_audio(out_path, stereo, TARGET_SR)
                 exports["stereo"] = os.path.relpath(out_path, out_dir)
             if args.export_mono:
                 mono = downmix_to_mono(fx_out)
-                fx_path = os.path.join(fx_root, form, "mono")
-                ensure_dir(fx_path)
-                out_path = os.path.join(fx_path, fx_name)
+                out_path = os.path.join(oneshot_fx_root, "mono", fx_name)
                 write_audio(out_path, mono, TARGET_SR)
                 exports["mono"] = os.path.relpath(out_path, out_dir)
 
@@ -846,11 +1072,19 @@ def main(argv: Optional[List[str]] = None) -> None:
                 {
                     "variant_id": uuid.uuid4().hex,
                     "source_sample_id": base_entry["sample_id"],
+                    "variant_type": "oneshot_fx",
                     "chain": chain,
                     "params": params,
                     "exports": exports,
                 }
             )
+            fx_total += 1
+            if oneshot_fx_target and fx_total >= oneshot_fx_target:
+                break
+        if oneshot_fx_target and fx_total >= oneshot_fx_target:
+            li(f"Reached oneshot_fx target: {fx_total}/{oneshot_fx_target}")
+    elif oneshot_fx_target > 0 and not fx_pool:
+        lw("No one-shot samples available for FX variants; skipping oneshot_fx generation.")
 
     # Write manifest + credits
     if args.write_manifest:
@@ -888,4 +1122,3 @@ def main(argv: Optional[List[str]] = None) -> None:
         f"variants={len(manifest.get('variants', []))} "
         f"elapsed={time.monotonic() - gen_start_t:.1f}s"
     )
-
