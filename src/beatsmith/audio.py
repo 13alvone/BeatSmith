@@ -254,7 +254,7 @@ def duration_bucket(
     sec_per_beat = 60.0 / max(bpm_assumption, 1e-6)
     beats = duration_s / sec_per_beat
     buckets = [
-        (0.125, "t2"),
+        (0.125, "t32"),
         (0.25, "six"),
         (0.5, "e"),
         (1.0, "q"),
@@ -910,4 +910,3 @@ def assemble_track(
     mix_perc = crossfade_concat(perc_chunks, TARGET_SR, fade_s=crossfade_s)
     mix_tex = crossfade_concat(tex_chunks, TARGET_SR, fade_s=crossfade_s * 0.8)
     return mix_perc, mix_tex
-
